@@ -49,9 +49,9 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
 
-from github_headers import github_headers  # noqa: E402
-from https_only import urlopen_https  # noqa: E402
-from session_bylines import strip_bylines  # noqa: E402
+from github_headers import github_headers
+from https_only import urlopen_https
+from session_bylines import strip_bylines
 
 # The byline pattern and strip_bylines() live in session_bylines.py, whose
 # docstring names the write-time checker that carries a copy of them.

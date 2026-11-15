@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import check_privileged_checkouts as cpc
 from check_privileged_checkouts import violations
 
+
 class ViolationDetectionTest(unittest.TestCase):
     """The rule itself, exercised against synthetic workflows."""
 
