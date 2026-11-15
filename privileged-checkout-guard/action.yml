@@ -1,0 +1,29 @@
+name: Privileged checkout guard
+description: >-
+  Fail when a workflow job that a pull request can trigger, and that holds write
+  permissions, checks out pull request code.
+
+inputs:
+  workflows-dir:
+    description: Directory holding the workflow files, relative to the workspace.
+    required: false
+    default: .github/workflows
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned requirements
+      shell: bash
+      run: >-
+        "$GITHUB_ACTION_PATH/../install-pinned-requirements/install.sh"
+        --venv "$RUNNER_TEMP/privileged-checkout-guard-venv"
+        "$GITHUB_ACTION_PATH/../requirements.txt"
+
+    - name: Check workflow checkouts
+      shell: bash
+      env:
+        WORKFLOWS_DIR: ${{ inputs.workflows-dir }}
+      run: >-
+        "$RUNNER_TEMP/privileged-checkout-guard-venv/bin/python"
+        "$GITHUB_ACTION_PATH/check_privileged_checkouts.py"
+        --workflows-dir "$WORKFLOWS_DIR"

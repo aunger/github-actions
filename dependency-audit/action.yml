@@ -1,0 +1,39 @@
+name: Dependency audit
+description: >-
+  Run pip-audit over every hash-pinned requirements lock in the repository, and
+  fail on a finding that no ignore entry justifies, or on an ignore entry that no
+  finding uses any more.
+
+inputs:
+  lock-glob:
+    description: >-
+      Glob, relative to the workspace, that finds the locks. Paths with a hidden
+      directory in them are skipped.
+    required: false
+    default: '**/requirements*.txt'
+  ignore-file:
+    description: >-
+      TOML file of tolerated findings, relative to the workspace; see README.md
+      for its format. A file that does not exist is an empty list.
+    required: false
+    default: requirements-audit-ignore.toml
+
+runs:
+  using: composite
+  steps:
+    - name: Install pip-audit
+      shell: bash
+      run: >-
+        "$GITHUB_ACTION_PATH/../install-pinned-requirements/install.sh"
+        --venv "$RUNNER_TEMP/dependency-audit-venv"
+        "$GITHUB_ACTION_PATH/requirements-audit.txt"
+
+    - name: Audit requirements locks
+      shell: bash
+      env:
+        LOCK_GLOB: ${{ inputs.lock-glob }}
+        IGNORE_FILE: ${{ inputs.ignore-file }}
+      run: >-
+        "$RUNNER_TEMP/dependency-audit-venv/bin/python"
+        "$GITHUB_ACTION_PATH/audit_requirements.py"
+        --lock-glob "$LOCK_GLOB" --ignore-file "$IGNORE_FILE"

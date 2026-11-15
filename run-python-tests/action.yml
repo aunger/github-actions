@@ -1,0 +1,56 @@
+name: Run Python and shell tests
+description: >-
+  Run a repository's shell tests (test_*.sh) and Python tests (test_*.py, each
+  directory discovered with unittest on its own), optionally after installing a
+  hash-pinned requirements lock.
+
+inputs:
+  paths:
+    description: >-
+      Directories to search for tests, one per line, relative to the workspace.
+      Directories whose names start with a dot are not searched.
+    required: false
+    default: .
+  kind:
+    description: shell, python or all.
+    required: false
+    default: all
+  requirements:
+    description: >-
+      Path to a hash-pinned requirements lock to install into the Python on PATH
+      before the tests run, with --require-hashes and --force-reinstall. When
+      empty, nothing is installed.
+    required: false
+    default: ''
+  python:
+    description: The interpreter that installs the lock and runs the Python tests.
+    required: false
+    default: python3
+  github-token:
+    description: >-
+      A token the tests get as GITHUB_TOKEN, for tests that call the GitHub API
+      and skip without one. When empty, GITHUB_TOKEN is whatever the calling
+      step's env sets, if anything. GITHUB_REPOSITORY is always set, by the
+      runner.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned requirements
+      if: inputs.requirements != ''
+      shell: bash
+      env:
+        LOCK_FILE: ${{ inputs.requirements }}
+        PYTHON: ${{ inputs.python }}
+      run: '"$GITHUB_ACTION_PATH/../install-pinned-requirements/install.sh" "$LOCK_FILE"'
+
+    - name: Run tests
+      shell: bash
+      env:
+        TEST_PATHS: ${{ inputs.paths }}
+        TEST_KIND: ${{ inputs.kind }}
+        TEST_GITHUB_TOKEN: ${{ inputs.github-token }}
+        PYTHON: ${{ inputs.python }}
+      run: '"$GITHUB_ACTION_PATH/run_tests.sh"'

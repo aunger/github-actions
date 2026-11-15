@@ -1,0 +1,62 @@
+name: Branch cleanup report
+description: >-
+  Sort a repository's branches into Delete, Review and Keep and write that to the
+  job summary (mode report), or delete the branches a person named when approving
+  the run (mode delete).
+
+# Call it twice, in two jobs: a report job, then a delete job that needs it and
+# runs in an environment with required reviewers, so that the approval comment
+# names the branches to delete. Both jobs check the repository out first.
+#
+#   report: permissions contents: read, pull-requests: read
+#   delete: permissions actions: read, contents: write, pull-requests: read;
+#           with `choices` taken from the report job's `choices` output
+#
+# The rules, and the checks delete makes before deleting anything, are in the
+# docstring of branch_cleanup_report.py.
+
+inputs:
+  mode:
+    description: report or delete.
+    required: true
+  github-token:
+    description: A token the mode's permissions are granted to.
+    required: false
+    default: ${{ github.token }}
+  choices:
+    description: For delete, the report step's `choices` output.
+    required: false
+    default: ''
+  environment:
+    description: >-
+      For delete, the name of the environment the delete job runs in. The run must
+      have an approval for it, or nothing is deleted.
+    required: false
+    default: branch-deletion
+  keep:
+    description: Branch name patterns (fnmatch syntax, one per line) that are always kept.
+    required: false
+    default: ''
+  grace-days:
+    description: A branch that would be deleted but whose tip is newer than this goes under Review.
+    required: false
+    default: '14'
+
+outputs:
+  choices:
+    description: For report, the branches it offered, as JSON, to pass to the delete job.
+    value: ${{ steps.run.outputs.choices }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        MODE: ${{ inputs.mode }}
+        CHOICES: ${{ inputs.choices }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        KEEP: ${{ inputs.keep }}
+        GRACE_DAYS: ${{ inputs.grace-days }}
+      run: '"$GITHUB_ACTION_PATH/run_action.sh"'

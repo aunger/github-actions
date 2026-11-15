@@ -1,0 +1,42 @@
+name: Install pinned requirements
+description: >-
+  Install a hash-pinned pip lock with --require-hashes and --force-reinstall,
+  into a new virtual environment or into the Python on PATH.
+
+inputs:
+  lock-file:
+    description: >-
+      Path to the lock, relative to the workspace: every package, top-level and
+      transitive, pinned to an exact version and a SHA-256 hash.
+    required: true
+  venv:
+    description: >-
+      Directory for a new virtual environment to install into. When empty, the
+      packages go into the Python on PATH.
+    required: false
+    default: ''
+  python:
+    description: The interpreter to install with, or to create the virtual environment with.
+    required: false
+    default: python3
+
+outputs:
+  python:
+    description: The interpreter that now has the packages (inside the virtual environment, when venv is set).
+    value: ${{ steps.install.outputs.python }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        LOCK_FILE: ${{ inputs.lock-file }}
+        VENV: ${{ inputs.venv }}
+        PYTHON: ${{ inputs.python }}
+      run: |
+        args=()
+        if [[ -n "$VENV" ]]; then
+          args+=(--venv "$VENV")
+        fi
+        "$GITHUB_ACTION_PATH/install.sh" "${args[@]}" "$LOCK_FILE"

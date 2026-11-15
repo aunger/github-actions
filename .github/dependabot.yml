@@ -1,0 +1,35 @@
+version: 2
+updates:
+  # Third-party actions: "/" covers the workflows, and "/*" each action's
+  # <action>/action.yml, which Dependabot reads only in a directory it is given.
+  # The actions use none today; test_action_files.py requires any that one adds
+  # to be pinned to a full commit SHA, and checks this entry still reaches every
+  # action's directory.
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/*"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "11:00"
+      timezone: "UTC"
+
+  # The hash-pinned Python locks: requirements.txt for the scripts, and
+  # dependency-audit/requirements-audit.txt for pip-audit.
+  # Each lock is `uv pip compile --universal --python-version 3.11 --generate-hashes`
+  # output from the .in beside it, which the "uv" ecosystem regenerates with the
+  # same flags; the "pip" ecosystem would not.
+  # `dependency-type: all` lets it propose a bump to a package that only the
+  # lock names, which is where most advisories land.
+  - package-ecosystem: "uv"
+    directories:
+      - "/"
+      - "/dependency-audit"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "12:00"
+      timezone: "UTC"
+    allow:
+      - dependency-type: "all"
