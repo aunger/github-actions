@@ -262,6 +262,16 @@ run_in "$C"; rc=$?
 [[ $rc -eq 0 ]] && pass "exits 0: the relative import resolves" || fail "exit code $rc: $(cat "$C/../out.log")"
 [[ "$(grep -c "^python:pkg$" "$C/../ran.log")" -eq 1 ]] && pass "the package's test ran once" || fail "ran: $(ran "$C")"
 
+echo "== (s) a search root that is itself a package, with no test of its own, does not hang"
+C="$TMP/s/repo"; mkdir -p "$C/pkg"
+: > "$C/__init__.py"
+: > "$C/pkg/__init__.py"
+python_test "$C/pkg/test_a.py"
+: > "$C/../ran.log"
+(cd "$C" && LOG="$C/../ran.log" timeout 30 "$RUN_TESTS" > "$C/../out.log" 2>&1); rc=$?
+[[ $rc -eq 0 ]] && pass "exits 0 (124 would be the timeout)" || fail "exit code $rc: $(cat "$C/../out.log")"
+[[ "$(grep -c "test_a.py" "$C/../ran.log")" -eq 1 ]] && pass "the package's test ran once" || fail "ran: $(ran "$C")"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

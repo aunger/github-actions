@@ -124,7 +124,10 @@ if [[ "$KIND" == "python" || "$KIND" == "all" ]]; then
         top="$dir"
         covered=no
         while [[ -f "$top/__init__.py" ]]; do
-            top=$(dirname "$top")
+            parent=$(dirname "$top")
+            # dirname of . is . and of / is /: the walk can go no higher.
+            [[ "$parent" != "$top" ]] || break
+            top="$parent"
             if grep -Fqx -- "$top" <<< "$python_dirs"; then
                 covered=yes
                 break
