@@ -62,15 +62,16 @@ has_arg "$C" "--environment" && has_arg "$C" "branch-deletion" && pass "passes t
 has_arg "$C" "--choices" && has_arg "$C" '{"a":1}' && pass "passes the choices unsplit" || fail "args: $(cat "$C/args")"
 has_arg "$C" "--choices-output" && fail "delete passed --choices-output" || pass "does not pass --choices-output"
 
-echo "== (c) each keep line becomes one --keep, blank lines dropped"
+echo "== (c) each keep line becomes one --keep, trimmed, blank lines dropped"
 C="$TMP/c"
-run "$C" MODE=report "KEEP=release/*
-
-legacy branch/*
-"; rc=$?
+# Built with printf so that the whitespace under test is not in this file, where
+# an editor could strip it.
+run "$C" MODE=report "KEEP=$(printf 'release/*  \n   \n  legacy branch/*\t\n')"; rc=$?
 [[ $rc -eq 0 ]] && pass "exits 0" || fail "exit code $rc: $(cat "$C/stderr")"
 [[ "$(grep -cx -- '--keep' "$C/args")" -eq 2 ]] && pass "two --keep options" || fail "args: $(cat "$C/args")"
-has_arg "$C" "release/*" && has_arg "$C" "legacy branch/*" && pass "patterns arrive whole" || fail "args: $(cat "$C/args")"
+has_arg "$C" "release/*" && pass "trailing spaces dropped" || fail "args: $(cat -A "$C/args")"
+has_arg "$C" "legacy branch/*" && pass "leading spaces and a trailing tab dropped, inner space kept" \
+    || fail "args: $(cat -A "$C/args")"
 
 echo "== (d) delete without choices or environment is a usage error"
 C="$TMP/d"

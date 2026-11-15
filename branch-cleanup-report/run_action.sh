@@ -7,7 +7,8 @@
 #   MODE         report or delete
 #   CHOICES      for delete, the JSON the report step output
 #   ENVIRONMENT  for delete, the environment the run's approval is for
-#   KEEP         branch name patterns to keep, one per line
+#   KEEP         branch name patterns to keep, one per line; whitespace around
+#                each is dropped, since no branch name has any
 #   GRACE_DAYS   the report's grace period in days
 #   PYTHON       the interpreter to run (default: python3)
 #
@@ -28,7 +29,9 @@ if [[ -n "${GRACE_DAYS:-}" ]]; then
     args+=(--grace-days "$GRACE_DAYS")
 fi
 while IFS= read -r pattern; do
-    if [[ -n "${pattern//[[:space:]]/}" ]]; then
+    pattern="${pattern#"${pattern%%[![:space:]]*}"}"
+    pattern="${pattern%"${pattern##*[![:space:]]}"}"
+    if [[ -n "$pattern" ]]; then
         args+=(--keep "$pattern")
     fi
 done <<< "${KEEP:-}"
