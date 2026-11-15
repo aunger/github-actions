@@ -1,0 +1,26 @@
+name: Archive stale test-failure issues
+description: >-
+  Replace the test-failure label with test-failure-archive on issues, open or
+  closed, that have had no activity for a number of days, so they fall out of
+  the search a test-failure reporter uses to find an existing issue.
+
+inputs:
+  github-token:
+    description: A token with issues write access.
+    required: false
+    default: ${{ github.token }}
+  stale-days:
+    description: Days without activity before an issue is archived.
+    required: false
+    default: '21'
+
+runs:
+  using: composite
+  steps:
+    - name: Archive stale test-failure issues
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        STALE_DAYS: ${{ inputs.stale-days }}
+      run: python3 "$GITHUB_ACTION_PATH/archive_stale_test_failures.py"
