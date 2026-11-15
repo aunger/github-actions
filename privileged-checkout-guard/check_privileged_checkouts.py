@@ -164,7 +164,8 @@ def checkout_refs(job: dict) -> list:
     refs = []
     for step in job.get("steps") or []:
         uses = step.get("uses")
-        if not isinstance(uses, str) or uses.split("@", 1)[0] != CHECKOUT_ACTION:
+        # GitHub resolves an action's owner and repository case-insensitively.
+        if not isinstance(uses, str) or uses.split("@", 1)[0].casefold() != CHECKOUT_ACTION:
             continue
         ref = (step.get("with") or {}).get("ref")
         refs.append(ref.strip() if isinstance(ref, str) else ref)

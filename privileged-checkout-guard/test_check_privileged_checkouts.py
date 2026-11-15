@@ -136,6 +136,11 @@ jobs:
         no_checkout = self.UNPINNED.replace("      - uses: actions/checkout@v6\n", "")
         self.assertEqual([], self._violations(no_checkout))
 
+    def test_checkout_is_matched_in_any_case(self):
+        # GitHub resolves the owner and repository of `uses:` case-insensitively.
+        cased = self.UNPINNED.replace("actions/checkout@v6", "Actions/Checkout@v6")
+        self.assertEqual(1, len(self._violations(cased)))
+
     def test_a_similarly_named_action_is_not_mistaken_for_checkout(self):
         other = self.UNPINNED.replace(
             "      - uses: actions/checkout@v6\n", "      - uses: actions/checkout-foo@v1\n"
