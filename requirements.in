@@ -1,0 +1,35 @@
+# Source pins for the runtime dependencies of this repository's Python scripts.
+# This file lists only the top-level packages; the fully resolved, hash-pinned
+# lock that pip actually installs is requirements.txt (generated from this file).
+#
+# Every package is pinned to an exact version from PyPI, a trusted language
+# package registry. The generated lock additionally pins the full transitive
+# closure to exact versions and SHA-256 hashes so pip --require-hashes can
+# refuse any artifact whose hash does not match (same hardening as the lock
+# this one was copied from, in aunger/gallery-button-for-pixel-camera#723).
+#
+# defusedxml hardens XML parsing; requests performs the GitHub API calls;
+# PyYAML parses workflow and config YAML.
+#
+# Regenerating the lock (do this whenever a pin here changes):
+#
+#   uv pip compile --universal --python-version 3.11 --generate-hashes \
+#       requirements.in -o requirements.txt
+#
+# That command keeps the versions already present in the lock, so on its own it
+# only re-resolves what a changed pin in this file forces. Transitive releases
+# published since the last run are left alone, including security fixes for
+# packages nothing here pins directly. Add --upgrade to re-resolve the whole
+# closure, or -P/--upgrade-package NAME to move one package and whatever it
+# drags with it, which keeps a security bump to a reviewable diff.
+#
+# --universal + --python-version 3.11 make the lock a superset that covers every
+# interpreter the actions run under, so any marker-gated entry resolves
+# correctly wherever pip runs it under --require-hashes.
+#
+# The floor is 3.11, so the lock does not cover Python 3.10.
+# Raise the floor again, and regenerate every lock, when packages start dropping
+# 3.11; check first that no action still runs the version being dropped.
+defusedxml==0.7.1
+requests==2.34.2
+PyYAML==6.0.3
