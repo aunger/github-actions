@@ -22,6 +22,7 @@ uses: aunger/github-actions/<action>@<40-character-sha>
 | `archive-stale-test-failures` | Swaps the `test-failure` label for `test-failure-archive` on issues with no recent activity. |
 
 Each action's `action.yml` documents its inputs, and the permissions and triggers its caller needs.
+`install-pinned-requirements` and `dependency-audit` also have a `README.md`: the first says how to write an idempotent installer for places other than CI, and the second documents the ignore file.
 
 ## Layout
 
