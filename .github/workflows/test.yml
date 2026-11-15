@@ -1,0 +1,58 @@
+name: Test
+
+# Runs this repository's tests through the run-python-tests action, so the
+# action is exercised the way a consumer calls it, and runs dependency-audit and
+# privileged-checkout-guard over this repository's own locks and workflows.
+#
+# The schedule is for dependency-audit: an advisory published against a lock
+# nobody has touched is caused by no push or pull request.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 9 * * 1'   # Mondays at 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Run the shell and Python tests
+        uses: ./run-python-tests
+        with:
+          requirements: requirements.txt
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Audit this repository's locks
+        uses: ./dependency-audit
+
+  privileged-checkout-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Check this repository's workflows
+        uses: ./privileged-checkout-guard
