@@ -80,6 +80,7 @@ Exit codes:
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -186,18 +187,59 @@ def normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def discover_locks(root: Path, lock_glob: str = DEFAULT_LOCK_GLOB) -> list[Path]:
-    """Return every requirements lock under *root*, sorted by root-relative path.
+def glob_regex(pattern: str) -> re.Pattern:
+    """Return a regex matching the root-relative, forward-slash paths *pattern* matches.
 
-    A path with a hidden component (a virtualenv at ``.venv``, ``.git``) is
-    skipped: such a directory holds installed packages' own files, not locks.
+    The pattern is a ``pathlib`` glob: ``**/`` matches any number of directories,
+    none included, ``*`` and ``?`` match within one path component, and
+    ``[...]`` is a character class. (``glob.translate`` does this from Python
+    3.13 only.)
     """
-    return sorted(
-        path
-        for path in root.glob(lock_glob)
-        if path.is_file()
-        and not any(part.startswith(".") for part in path.relative_to(root).parts)
-    )
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:[^/]+/)*")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[" and "]" in pattern[i + 2 :]:
+            end = pattern.index("]", i + 2)
+            body = pattern[i + 1 : end]
+            if body.startswith("!"):
+                out.append("[^" + re.escape(body[1:]) + "]")
+            else:
+                out.append("[" + re.escape(body) + "]")
+            i = end + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def discover_locks(root: Path, lock_glob: str = DEFAULT_LOCK_GLOB) -> list[Path]:
+    """Return every requirements lock under *root* matching *lock_glob*, sorted.
+
+    A directory whose name starts with a dot (a virtualenv at ``.venv``,
+    ``.git``) is not searched: such a directory holds installed packages' or
+    git's own files, not locks, and skipping it during the walk keeps a large
+    checkout's history out of it.
+    """
+    matches = glob_regex(lock_glob).match
+    found = []
+    for directory, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+        for name in filenames:
+            path = Path(directory) / name
+            if not name.startswith(".") and matches(path.relative_to(root).as_posix()):
+                found.append(path)
+    return sorted(found)
 
 
 def relative_to_root(path: Path, root: Path) -> str:
@@ -668,7 +710,8 @@ def main(argv: list[str] | None = None, runner=run_pip_audit) -> int:
     args = parse_args(argv)
     root = args.root.resolve()
     ignore_path = args.ignore_file if args.ignore_file is not None else root / DEFAULT_IGNORE_FILE
-    locks = [p.resolve() for p in args.locks] or discover_locks(root, args.lock_glob)
+    discovered = discover_locks(root, args.lock_glob)
+    locks = [p.resolve() for p in args.locks] or discovered
 
     try:
         if not locks:
@@ -681,7 +724,7 @@ def main(argv: list[str] | None = None, runner=run_pip_audit) -> int:
         # misfiled and must be loud; an entry naming a real lock that a narrowed
         # run happens not to cover is simply out of scope, and treating that as
         # misfiled made the documented `LOCK ...` form unusable.
-        known = in_scope | {relative_to_root(p, root) for p in discover_locks(root, args.lock_glob)}
+        known = in_scope | {relative_to_root(p, root) for p in discovered}
         loaded = load_ignores(ignore_path, known)
         ignores = [entry for entry in loaded if entry.lock in in_scope]
         out_of_scope = [entry for entry in loaded if entry.lock not in in_scope]

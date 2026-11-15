@@ -687,6 +687,45 @@ class TestDiscoverLocks(unittest.TestCase):
         self.touch("scripts/requirements.txt")
         self.assertEqual(self.found("scripts/**/requirements*.txt"), ["scripts/requirements.txt"])
 
+    def test_hidden_directories_are_not_walked(self):
+        self.touch("requirements.txt")
+        self.touch(".git/objects/requirements.txt")
+        walked = []
+        real_walk = os.walk
+
+        def recording_walk(top):
+            for directory, dirnames, filenames in real_walk(top):
+                walked.append(Path(directory).relative_to(self.root).as_posix())
+                yield directory, dirnames, filenames
+
+        with unittest.mock.patch.object(ar.os, "walk", recording_walk):
+            self.assertEqual(self.found(), ["requirements.txt"])
+        self.assertEqual(["."], walked)
+
+    def test_glob_regex_follows_pathlib_glob(self):
+        cases = {
+            "**/requirements*.txt": (
+                ["requirements.txt", "a/requirements-x.txt", "a/b/requirements.txt"],
+                ["a/requirements.in", "arequirements.txt"],
+            ),
+            "scripts/**/requirements*.txt": (
+                ["scripts/requirements.txt", "scripts/ci/requirements.txt"],
+                ["requirements.txt", "other/scripts/requirements.txt"],
+            ),
+            "requirements?.txt": (["requirements1.txt"], ["requirements.txt", "a/requirements1.txt"]),
+            "requirements[ab].txt": (["requirementsa.txt"], ["requirementsc.txt"]),
+            "requirements[!ab].txt": (["requirementsc.txt"], ["requirementsa.txt"]),
+            "*/requirements.txt": (["a/requirements.txt"], ["requirements.txt", "a/b/requirements.txt"]),
+        }
+        for pattern, (matching, other) in cases.items():
+            regex = ar.glob_regex(pattern)
+            for path in matching:
+                with self.subTest(pattern=pattern, path=path):
+                    self.assertTrue(regex.match(path))
+            for path in other:
+                with self.subTest(pattern=pattern, path=path):
+                    self.assertFalse(regex.match(path))
+
     def test_a_directory_matching_the_glob_is_not_a_lock(self):
         (self.root / "requirements.txt").mkdir()
         self.assertEqual(self.found(), [])
