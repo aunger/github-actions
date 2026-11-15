@@ -31,19 +31,10 @@ runs:
   steps:
     # The edits this action makes are made by github-actions[bot]; skipping that
     # actor keeps a bot edit from being processed again.
-    - name: Install pinned requirements
-      if: github.actor != 'github-actions[bot]'
-      shell: bash
-      run: >-
-        "$GITHUB_ACTION_PATH/../install-pinned-requirements/install.sh"
-        --venv "$RUNNER_TEMP/strip-session-bylines-venv"
-        "$GITHUB_ACTION_PATH/../requirements.txt"
-
+    # The script uses only the standard library, so nothing is installed first.
     - name: Strip session-URL bylines
       if: github.actor != 'github-actions[bot]'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
-      run: >-
-        "$RUNNER_TEMP/strip-session-bylines-venv/bin/python"
-        "$GITHUB_ACTION_PATH/strip_session_bylines.py"
+      run: python3 "$GITHUB_ACTION_PATH/strip_session_bylines.py"

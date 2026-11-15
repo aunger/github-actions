@@ -47,11 +47,10 @@ import json
 import os
 import sys
 
-import requests
-
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
 
 from github_headers import github_headers  # noqa: E402
+from https_only import urlopen_https  # noqa: E402
 from session_bylines import strip_bylines  # noqa: E402
 
 # The byline pattern and strip_bylines() live in session_bylines.py, whose
@@ -72,15 +71,12 @@ def _update(method: str, token: str, url: str, body: str) -> bool:
     Returns:
         True if the request succeeded, False otherwise.
     """
+    headers = {**github_headers(token), "Content-Type": "application/json"}
+    data = json.dumps({"body": body}).encode()
     try:
-        req_method = getattr(requests, method)
-        resp = req_method(
-            url,
-            headers=github_headers(token),
-            json={"body": body},
-            timeout=30,
-        )
-        resp.raise_for_status()
+        # urlopen raises HTTPError for any status outside 2xx.
+        with urlopen_https(url, data, headers=headers, method=method.upper(), timeout=30):
+            pass
         return True
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: {method.upper()} {url} failed: {exc}", file=sys.stderr)

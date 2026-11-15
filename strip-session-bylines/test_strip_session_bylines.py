@@ -6,7 +6,8 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+import urllib.error
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 import strip_session_bylines as ssb
@@ -98,6 +99,28 @@ class TestStripBylines(unittest.TestCase):
         self.assertEqual(ssb.strip_bylines(text), "Line one\nLine two")
 
 
+def sent(mock_open):
+    """Return the method, URL and body of the one request *mock_open* received."""
+    mock_open.assert_called_once()
+    args, kwargs = mock_open.call_args
+    return kwargs["method"], args[0], json.loads(args[1])["body"]
+
+
+class TestUpdate(unittest.TestCase):
+    @patch("strip_session_bylines.urlopen_https")
+    def test_sends_json_with_the_github_headers(self, mock_open):
+        self.assertTrue(ssb._patch("tok", "https://api.github.com/x", "text"))
+        kwargs = mock_open.call_args[1]
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer tok")
+        self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
+        self.assertEqual(kwargs["timeout"], 30)
+
+    @patch("strip_session_bylines.urlopen_https")
+    def test_an_http_error_returns_false(self, mock_open):
+        mock_open.side_effect = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+        self.assertFalse(ssb._put("tok", "https://api.github.com/x", "text"))
+
+
 # ---------------------------------------------------------------------------
 # handle_issue
 # ---------------------------------------------------------------------------
@@ -107,37 +130,35 @@ class TestHandleIssue(unittest.TestCase):
     def _payload(self, number, body):
         return {"issue": {"number": number, "body": body}}
 
-    @patch("strip_session_bylines.requests")
-    def test_patches_issue_body_when_byline_found(self, mock_requests):
-        mock_resp = MagicMock()
-        mock_requests.patch.return_value = mock_resp
+    @patch("strip_session_bylines.urlopen_https")
+    def test_patches_issue_body_when_byline_found(self, mock_open):
         payload = self._payload(7, "Good text\nhttps://claude.ai/code/session_abc")
 
         result = ssb.handle_issue("tok", "owner/repo", payload)
 
         self.assertTrue(result)
-        mock_requests.patch.assert_called_once()
-        url, kwargs = mock_requests.patch.call_args[0][0], mock_requests.patch.call_args[1]
+        method, url, body = sent(mock_open)
+        self.assertEqual(method, "PATCH")
         self.assertIn("/issues/7", url)
-        self.assertEqual(kwargs["json"]["body"], "Good text")
+        self.assertEqual(body, "Good text")
 
-    @patch("strip_session_bylines.requests")
-    def test_skips_patch_when_no_byline(self, mock_requests):
+    @patch("strip_session_bylines.urlopen_https")
+    def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(7, "Just text, no byline.")
         result = ssb.handle_issue("tok", "owner/repo", payload)
         self.assertFalse(result)
-        mock_requests.patch.assert_not_called()
+        mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.requests")
-    def test_handles_none_body_gracefully(self, mock_requests):
+    @patch("strip_session_bylines.urlopen_https")
+    def test_handles_none_body_gracefully(self, mock_open):
         payload = {"issue": {"number": 1, "body": None}}
         result = ssb.handle_issue("tok", "owner/repo", payload)
         self.assertFalse(result)
-        mock_requests.patch.assert_not_called()
+        mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.requests")
-    def test_returns_false_on_patch_error(self, mock_requests):
-        mock_requests.patch.side_effect = Exception("network")
+    @patch("strip_session_bylines.urlopen_https")
+    def test_returns_false_on_patch_error(self, mock_open):
+        mock_open.side_effect = Exception("network")
         payload = self._payload(9, "text\nhttps://claude.ai/code/session_z")
         result = ssb.handle_issue("tok", "owner/repo", payload)
         self.assertFalse(result)
@@ -152,25 +173,24 @@ class TestHandleIssueComment(unittest.TestCase):
     def _payload(self, comment_id, body):
         return {"comment": {"id": comment_id, "body": body}}
 
-    @patch("strip_session_bylines.requests")
-    def test_patches_comment_body_when_byline_found(self, mock_requests):
-        mock_resp = MagicMock()
-        mock_requests.patch.return_value = mock_resp
+    @patch("strip_session_bylines.urlopen_https")
+    def test_patches_comment_body_when_byline_found(self, mock_open):
         payload = self._payload(55, "text\nhttps://claude.ai/code/session_foo")
 
         result = ssb.handle_issue_comment("tok", "owner/repo", payload)
 
         self.assertTrue(result)
-        url = mock_requests.patch.call_args[0][0]
+        method, url, body = sent(mock_open)
+        self.assertEqual(method, "PATCH")
         self.assertIn("/issues/comments/55", url)
-        self.assertEqual(mock_requests.patch.call_args[1]["json"]["body"], "text")
+        self.assertEqual(body, "text")
 
-    @patch("strip_session_bylines.requests")
-    def test_skips_patch_when_no_byline(self, mock_requests):
+    @patch("strip_session_bylines.urlopen_https")
+    def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(55, "No byline here.")
         result = ssb.handle_issue_comment("tok", "owner/repo", payload)
         self.assertFalse(result)
-        mock_requests.patch.assert_not_called()
+        mock_open.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -182,32 +202,31 @@ class TestHandlePullRequest(unittest.TestCase):
     def _payload(self, number, body):
         return {"pull_request": {"number": number, "body": body}}
 
-    @patch("strip_session_bylines.requests")
-    def test_patches_pr_body_when_byline_found(self, mock_requests):
-        mock_resp = MagicMock()
-        mock_requests.patch.return_value = mock_resp
+    @patch("strip_session_bylines.urlopen_https")
+    def test_patches_pr_body_when_byline_found(self, mock_open):
         payload = self._payload(12, "PR body\nhttps://claude.ai/code/session_qqq")
 
         result = ssb.handle_pull_request("tok", "owner/repo", payload)
 
         self.assertTrue(result)
-        url = mock_requests.patch.call_args[0][0]
+        method, url, body = sent(mock_open)
+        self.assertEqual(method, "PATCH")
         self.assertIn("/pulls/12", url)
-        self.assertEqual(mock_requests.patch.call_args[1]["json"]["body"], "PR body")
+        self.assertEqual(body, "PR body")
 
-    @patch("strip_session_bylines.requests")
-    def test_skips_patch_when_no_byline(self, mock_requests):
+    @patch("strip_session_bylines.urlopen_https")
+    def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(12, "Clean PR body.")
         result = ssb.handle_pull_request("tok", "owner/repo", payload)
         self.assertFalse(result)
-        mock_requests.patch.assert_not_called()
+        mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.requests")
-    def test_handles_none_body_gracefully(self, mock_requests):
+    @patch("strip_session_bylines.urlopen_https")
+    def test_handles_none_body_gracefully(self, mock_open):
         payload = {"pull_request": {"number": 3, "body": None}}
         result = ssb.handle_pull_request("tok", "owner/repo", payload)
         self.assertFalse(result)
-        mock_requests.patch.assert_not_called()
+        mock_open.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -219,25 +238,24 @@ class TestHandlePRReviewComment(unittest.TestCase):
     def _payload(self, comment_id, body):
         return {"comment": {"id": comment_id, "body": body}}
 
-    @patch("strip_session_bylines.requests")
-    def test_patches_review_comment_when_byline_found(self, mock_requests):
-        mock_resp = MagicMock()
-        mock_requests.patch.return_value = mock_resp
+    @patch("strip_session_bylines.urlopen_https")
+    def test_patches_review_comment_when_byline_found(self, mock_open):
         payload = self._payload(77, "nit\nhttps://claude.ai/code/session_bar")
 
         result = ssb.handle_pull_request_review_comment("tok", "owner/repo", payload)
 
         self.assertTrue(result)
-        url = mock_requests.patch.call_args[0][0]
+        method, url, body = sent(mock_open)
+        self.assertEqual(method, "PATCH")
         self.assertIn("/pulls/comments/77", url)
-        self.assertEqual(mock_requests.patch.call_args[1]["json"]["body"], "nit")
+        self.assertEqual(body, "nit")
 
-    @patch("strip_session_bylines.requests")
-    def test_skips_patch_when_no_byline(self, mock_requests):
+    @patch("strip_session_bylines.urlopen_https")
+    def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(77, "Clean review comment.")
         result = ssb.handle_pull_request_review_comment("tok", "owner/repo", payload)
         self.assertFalse(result)
-        mock_requests.patch.assert_not_called()
+        mock_open.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -252,46 +270,44 @@ class TestHandlePullRequestReview(unittest.TestCase):
             "pull_request": {"number": pr_number},
         }
 
-    @patch("strip_session_bylines.requests")
-    def test_patches_review_body_when_byline_found(self, mock_requests):
-        mock_resp = MagicMock()
-        mock_requests.put.return_value = mock_resp
+    @patch("strip_session_bylines.urlopen_https")
+    def test_patches_review_body_when_byline_found(self, mock_open):
         payload = self._payload(88, 42, "Looks good\nhttps://claude.ai/code/session_xyz")
 
         result = ssb.handle_pull_request_review("tok", "owner/repo", payload)
 
         self.assertTrue(result)
-        url = mock_requests.put.call_args[0][0]
+        method, url, body = sent(mock_open)
+        self.assertEqual(method, "PUT")
         self.assertIn("/pulls/42/reviews/88", url)
-        self.assertEqual(mock_requests.put.call_args[1]["json"]["body"], "Looks good")
+        self.assertEqual(body, "Looks good")
 
-    @patch("strip_session_bylines.requests")
-    def test_skips_patch_when_no_byline(self, mock_requests):
+    @patch("strip_session_bylines.urlopen_https")
+    def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(88, 42, "Clean review body.")
         result = ssb.handle_pull_request_review("tok", "owner/repo", payload)
         self.assertFalse(result)
-        mock_requests.put.assert_not_called()
+        mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.requests")
-    def test_handles_none_body_gracefully(self, mock_requests):
+    @patch("strip_session_bylines.urlopen_https")
+    def test_handles_none_body_gracefully(self, mock_open):
         payload = {"review": {"id": 1, "body": None}, "pull_request": {"number": 5}}
         result = ssb.handle_pull_request_review("tok", "owner/repo", payload)
         self.assertFalse(result)
-        mock_requests.put.assert_not_called()
+        mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.requests")
-    def test_patches_markdown_footer_in_review_body(self, mock_requests):
-        mock_resp = MagicMock()
-        mock_requests.put.return_value = mock_resp
+    @patch("strip_session_bylines.urlopen_https")
+    def test_patches_markdown_footer_in_review_body(self, mock_open):
         body = "Review\n---\n_Generated by [Claude Code](https://claude.ai/code/session_abc)_"
         payload = self._payload(100, 50, body)
 
         result = ssb.handle_pull_request_review("tok", "owner/repo", payload)
 
         self.assertTrue(result)
-        url = mock_requests.put.call_args[0][0]
+        method, url, body = sent(mock_open)
+        self.assertEqual(method, "PUT")
         self.assertIn("/pulls/50/reviews/100", url)
-        self.assertEqual(mock_requests.put.call_args[1]["json"]["body"], "Review")
+        self.assertEqual(body, "Review")
 
 
 # ---------------------------------------------------------------------------
