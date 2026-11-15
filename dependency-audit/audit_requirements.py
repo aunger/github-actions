@@ -5,11 +5,7 @@ A repository that installs its Python dependencies from a fully resolved lock
 with ``pip install --require-hashes`` has good supply-chain hygiene, but pinning
 is exactly what makes a lock go quietly stale: a dependency ships a fix and the
 pin keeps the old version indefinitely.
-Nothing watches for that unless something is set up to.
-The case this script came from: ``cryptography`` 49.0.0 carried a HIGH advisory
-for a week in aunger/gallery-button-for-pixel-camera while its attention went to
-a *different*, unfixable alert in the same lock
-(aunger/gallery-button-for-pixel-camera#788, aunger/gallery-button-for-pixel-camera#801).
+Nothing notices unless something is set up to.
 
 This wraps ``pip-audit`` in the two behaviors a bare invocation does not have.
 
@@ -25,10 +21,8 @@ A stale ignore entry fails the build
     This is the property that actually matters.  When an ignored ID stops being
     reported, the entry has become stale, usually because an upstream cap
     lifted or the package was dropped, and that is the moment to revisit it.
-    Without this, an ignore list only ever grows and rots into noise.  The
-    ``click`` case in aunger/gallery-button-for-pixel-camera#788 was exactly this shape: semgrep (since
-    removed from this repo) quietly relaxed its ``click~=8.1.8`` cap, and
-    nothing was watching, so a fixable HIGH was recorded as unfixable.
+    Without this, an ignore list only ever grows and rots into noise, and a
+    finding that became fixable stays recorded as unfixable.
     Suppressing findings with ``--ignore-vuln`` would make this check
     impossible, which is why the filtering happens here instead.
 
@@ -43,8 +37,8 @@ Why the locks are not handed to ``pip-audit`` directly
     list from the lock text and audits every pin regardless of marker.  A pin
     the parser does not recognize is an error, not a skip, so a change in the
     lock format shows up as a red build rather than as silent under-coverage.
-    (Names repeated at different versions, as ``rpds-py`` was until the locks'
-    Python floor rose to 3.11, cannot share one requirements file, because
+    (A name pinned at two versions under complementary markers cannot share
+    one requirements file, because
     ``pip-audit`` rejects the duplicate, so the pins are audited in as many
     rounds as the most-repeated name requires.)
 
@@ -496,9 +490,9 @@ def evaluate(
 
     An entry matches a finding through the finding's primary ID or any of its
     aliases.  Which of an advisory's IDs pip-audit reports as primary is not
-    stable: aunger/gallery-button-for-pixel-camera#1217's pyjwt advisories moved from CVE to PYSEC primary IDs
-    between two runs, with the CVE kept as an alias, and matching on the
-    primary ID alone turned every entry stale and every finding unignored.  An
+    stable: an advisory can move from a CVE to a PYSEC primary ID between
+    two runs, with the CVE kept as an alias, and matching on the primary ID
+    alone would turn every entry stale and every finding unignored.  An
     entry matched through an alias is live, not stale.  When more than one
     entry matches the same finding, say one keyed by the CVE and one by the
     PYSEC ID, every one of them is honored, so none is reported as stale, but

@@ -4,11 +4,11 @@
 Finds all issues (open or closed) labelled ``test-failure`` whose
 ``updated_at`` timestamp is older than STALE_DAYS (default 21).  For
 each such issue the ``test-failure`` label is removed and
-``test-failure-archive`` is added, so it falls out of the Phase 4
-dedup search scope.  Closed issues are included because a closed
-issue that still carries ``test-failure`` remains within
-``find_existing_issue``'s dedup search and could be reopened by a
-later failure of the same test.
+``test-failure-archive`` is added, so that a reporter which finds an
+existing issue for a failing test by the ``test-failure`` label no
+longer finds it, and files a fresh one.  Closed issues are included
+because a closed issue that still carries ``test-failure`` would still
+be found, and could be reopened by a later failure of the same test.
 
 Usage:
     python3 archive_stale_test_failures.py

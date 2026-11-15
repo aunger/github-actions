@@ -77,8 +77,7 @@ jobs:
         self.assertEqual([], self._violations(scheduled))
 
     def test_every_write_scope_is_privileged(self):
-        # Not just the issues/pull-requests pair the original case
-        # involved: contents: write over pull request code is strictly worse.
+        # Not just issues and pull-requests: contents: write over pull request code is strictly worse.
         for scope in ("contents", "actions", "packages", "deployments", "id-token"):
             with self.subTest(scope=scope):
                 found = self._violations(self._with_permissions(f"permissions:\n  {scope}: write"))

@@ -1,47 +1,36 @@
 #!/usr/bin/env python3
 """check_privileged_checkouts.py: A privileged pull-request job must not check out pull request code.
 
-Reads every workflow file under a directory (default `.github/workflows`),
-prints one line for each violation of the rule below, and exits 1 if there is
-any.
+Reads every workflow file in a directory (default `.github/workflows`), prints
+one line for each job that breaks the rule below, and exits 1 if there is any.
 
-The case this came from, in aunger/gallery-button-for-pixel-camera#882: five
-label and byline workflows checked out the pull request's own merge ref (the
-`actions/checkout` default on a `pull_request` event) and then ran a script out
-of that checkout, in a job declaring `issues: write` and `pull-requests: write`.
-Each was fixed by pinning `ref:` to the base branch, or by dropping the checkout.
-This check keeps that from being undone by a later edit that quietly restores
-the default checkout, which would break nothing visible and would pass every
-other check in the tree.
+A job that a pull request can trigger, that holds write permissions, and that
+checks out the pull request's merge ref (the `actions/checkout` default on a
+`pull_request` event) runs code the pull request controls with a token that
+can write.
+Pinning the checkout's `ref:` to the base branch, or dropping the checkout,
+avoids that.
+This check keeps a later edit from quietly restoring the default checkout,
+which would break nothing visible and pass every other check.
 
 What this achieves, and what it does not
 ----------------------------------------
 
-Read this before concluding that these jobs are now safe against the setting
-below, because they are not.
+Pinning the checkout narrows the exposure; it does not close it.
 
-The exposure the case above describes is real but latent.
 GitHub hands a fork's `pull_request` run a read-only `GITHUB_TOKEN` no matter
 what the workflow's `permissions:` block asks for, so the declared write scopes
 never materialize for untrusted code.
-Turning on the repository or organization setting "Send write tokens to
-workflows from fork pull requests" is what would make them materialize.
-
-Pinning the checkout narrows that exposure.
-It does not close it.
-On a `pull_request` event the workflow file itself is read from the pull
-request's merge ref, not from the base branch, which is exactly why these pins
-and this check took effect on the pull request that introduced them.
-A fork pull request after that setting was enabled would therefore not need to
-touch a script at all.
-It could edit the workflow file directly: add a `run:`
-step, restore the default `ref:`, or delete the pinning outright.
-It could edit the workflow that runs this check too, so that the check reports a clean tree.
+The repository or organization setting "Send write tokens to workflows from
+fork pull requests" is what would make them materialize.
+Once it is on, a pinned checkout is little protection: on a `pull_request`
+event the workflow file itself is read from the pull request's merge ref, so a
+fork pull request can edit the workflow directly (add a `run:` step, restore
+the default `ref:`), and can edit the workflow that runs this check too.
 
 What the pins buy is that such an attack has to appear in a workflow diff,
-where it gets read, rather than in a script buried somewhere in the tree,
-and that the rule is written down and enforced rather than assumed.
-That is worth having.
+where it gets read, rather than in a script somewhere in the tree, and that
+the rule is written down and enforced rather than assumed.
 It is not a security boundary, and nobody should enable that setting on the
 strength of it.
 
@@ -67,8 +56,7 @@ A job that checks out `pull_request.head.sha` on purpose needs no exemption if
 it holds `contents: read` only, which is the correct shape for running
 untrusted code.
 
-Every other write scope counts, not only the `issues` and `pull-requests` that
-the case above happened to involve.
+Every other write scope counts, not only `issues` and `pull-requests`.
 `contents: write` over pull-request-controlled code is a full compromise, and
 `actions: write`, `packages: write`, `deployments: write` and `id-token: write`
 are each at least as serious as `issues: write`.

@@ -8,7 +8,7 @@ With `--choices-output` it appends the branches it offered (every branch not kep
 tips and sections, to a file of `key=value` lines such as `$GITHUB_OUTPUT`.
 `delete` deletes the branches a person names in the comment they approved the run with, out of
 the ones `report` offered; see "Deleting" below.
-The branch-cleanup-report action runs both; see its README.md.
+The branch-cleanup-report action runs both; its action.yml says how to call it.
 
 A branch goes under "Delete" only on mechanical evidence that deleting it loses no commit:
 

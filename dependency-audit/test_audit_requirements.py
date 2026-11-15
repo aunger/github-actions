@@ -297,7 +297,7 @@ class TestLoadIgnores(IgnoreFileTestCase):
             ar.load_ignores(self.write_ignore(body), {"scripts/lock.txt"})
         self.assertIn("array of tables", str(ctx.exception))
 
-    # The three shapes below used to raise AttributeError. The file's whole job
+    # The three shapes below must give a message, not an AttributeError. The file's whole job
     # is to be re-read by a human under time pressure; a traceback is a worse
     # thing to hand them than the messages every other branch produces.
 
@@ -408,7 +408,7 @@ class TestEvaluate(unittest.TestCase):
     def test_spent_entry_is_stale_not_mismatched_when_a_sibling_entry_covers_the_other_package(
         self,
     ):
-        # Issue #815: one advisory ID legitimately covers two packages in one
+        # One advisory ID legitimately covers two packages in one
         # lock, each with its own entry. When one of the two findings stops
         # being reported, that entry's own match disappears while the ID is
         # still reported against the other package. That package is already
@@ -434,8 +434,8 @@ class TestEvaluate(unittest.TestCase):
         self.assertEqual([e.package for e in report.stale], ["otherpkg"])
 
     def test_entry_keyed_by_an_alias_tolerates_the_finding(self):
-        # Issue #1217: pip-audit began reporting pyjwt advisories under PYSEC
-        # primary IDs, with the CVE the entries were keyed by kept as an alias.
+        # pip-audit can report an advisory under a PYSEC primary ID, with the
+        # CVE an entry is keyed by kept as an alias.
         rekeyed = finding(vuln_id="PYSEC-2", aliases=("GHSA-x", "CVE-1"))
         report = ar.evaluate([("lock.txt", 3, 1)], [rekeyed], [entry(vuln_id="CVE-1")])
         self.assertFalse(report.failed)
@@ -569,7 +569,7 @@ class TestMain(IgnoreFileTestCase):
         self.assertIn("Stale ignore entries", out)
 
     def test_entry_keyed_by_an_alias_passes_after_the_primary_id_changes(self):
-        # Issue #1217 end to end: the entry names the ID that is now an alias.
+        # End to end: the entry names the ID that is now an alias.
         code, out = self.run_main(
             self.TOOL_ENTRY, {"risky": [vuln("PYSEC-2", aliases=("GHSA-x", "PYSEC-1"))]}
         )
@@ -604,7 +604,7 @@ class TestMain(IgnoreFileTestCase):
         self.assertIn("unreachable via alsorisky", out)
 
     def test_one_of_two_packages_sharing_an_advisory_going_spent_is_reported_stale(self):
-        # Companion to the fully-ignored case above (aunger/gallery-button-for-pixel-camera#815). When
+        # Companion to the fully-ignored case above. When
         # alsorisky's finding stops being reported, its entry is spent, not
         # misfiled: risky already has its own entry accounting for it.
         (self.tmpdir / "scripts" / "ci" / "requirements-tool.txt").write_text(
@@ -627,7 +627,7 @@ class TestMain(IgnoreFileTestCase):
         self.assertNotIn("naming the wrong package", out)
 
     def test_narrowing_to_one_lock_does_not_misread_the_other_locks_entries(self):
-        # Naming a lock is the documented interface, and it used to exit 2 with
+        # Naming a lock is the documented interface, so it must not exit 2 with
         # "not one of the audited locks" for every entry filed elsewhere.
         code, out = self.run_main(self.TOOL_ENTRY, {}, "scripts/requirements.txt")
         self.assertEqual(code, 0)

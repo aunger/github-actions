@@ -11,7 +11,7 @@ Two forms are matched:
 
 The Markdown-link footer's URL may end at "code" or continue with a
 "/session_<token>" suffix; both are stripped, since agents have emitted
-both forms (see aunger/gallery-button-for-pixel-camera#377).
+both forms.
 
 An optional \n--- separator preceding the Markdown-link footer is consumed
 along with it so no orphaned "---" is left behind.
@@ -55,9 +55,9 @@ from github_headers import github_headers  # noqa: E402
 from session_bylines import strip_bylines  # noqa: E402
 
 # The byline pattern and strip_bylines() live in session_bylines.py, whose
-# docstring names the write-time checker that carries a copy of them
-# (aunger/gallery-button-for-pixel-camera#909).  strip_bylines is re-exported here because this module's
-# callers and tests have always reached it through this name.
+# docstring names the write-time checker that carries a copy of them.
+# strip_bylines is re-exported here so that callers and tests reach it through
+# this module.
 
 
 def _update(method: str, token: str, url: str, body: str) -> bool:

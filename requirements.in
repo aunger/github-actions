@@ -5,8 +5,7 @@
 # Every package is pinned to an exact version from PyPI, a trusted language
 # package registry. The generated lock additionally pins the full transitive
 # closure to exact versions and SHA-256 hashes so pip --require-hashes can
-# refuse any artifact whose hash does not match (same hardening as the lock
-# this one was copied from, in aunger/gallery-button-for-pixel-camera#723).
+# refuse any artifact whose hash does not match.
 #
 # defusedxml hardens XML parsing; requests performs the GitHub API calls;
 # PyYAML parses workflow and config YAML.
