@@ -5,7 +5,7 @@ Installs a hash-pinned pip lock with `--require-hashes` and `--force-reinstall`,
 ```yaml
 - uses: actions/checkout@<sha>
 - id: deps
-  uses: aunger/github-actions/install-pinned-requirements@<40-character-sha>
+  uses: aunger/vcs-automation/install-pinned-requirements@<40-character-sha>
   with:
     lock-file: requirements.txt
     venv: ${{ runner.temp }}/venv

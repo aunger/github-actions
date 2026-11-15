@@ -4,7 +4,7 @@ Runs `pip-audit` over every hash-pinned requirements lock in a repository.
 
 ```yaml
 - uses: actions/checkout@<sha>
-- uses: aunger/github-actions/dependency-audit@<40-character-sha>
+- uses: aunger/vcs-automation/dependency-audit@<40-character-sha>
   with:
     lock-glob: scripts/**/requirements*.txt   # default: **/requirements*.txt
     ignore-file: scripts/ci/requirements-audit-ignore.toml   # default: requirements-audit-ignore.toml
