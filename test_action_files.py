@@ -11,7 +11,8 @@ other test would notice, since the actions run only on GitHub:
   controls (a branch name, a comment) is never pasted into shell text;
 - every `GITHUB_ACTION_PATH` file a step runs exists in the action's checkout;
 - every `uses:` is a full-length commit SHA, so an action here never runs code
-  that a tag move can change;
+  that a tag move can change, and Dependabot's github-actions entry reaches
+  every action's directory to bump it;
 - every action is listed in `README.md`.
 """
 
@@ -79,16 +80,23 @@ class ActionFilesTest(unittest.TestCase):
                     with self.subTest(action=path.parent.name, step=index, file=relative):
                         self.assertTrue((path.parent / relative).resolve().is_file())
 
-    def test_every_script_a_step_runs_is_executable_or_run_by_an_interpreter(self):
-        # A step that names a .sh file directly needs the file's execute bit,
-        # which git keeps; one run through `python` or `bash` does not.
+    def test_every_shell_script_a_step_runs_is_executable(self):
+        # Every .sh file a step names is run directly, so it needs the execute
+        # bit, which git keeps; the Python scripts are run through python3.
         for path in action_files():
             for index, step in enumerate(steps(path)):
-                run = (step.get("run") or "").strip().strip("'\"")
-                if run.startswith('"$GITHUB_ACTION_PATH') or run.startswith("$GITHUB_ACTION_PATH"):
-                    target = path.parent / ACTION_PATH_FILE.search(run).group(1)
-                    with self.subTest(action=path.parent.name, step=index):
-                        self.assertTrue(target.stat().st_mode & 0o111, f"{target} is not executable")
+                for relative in ACTION_PATH_FILE.findall(step.get("run") or ""):
+                    if relative.endswith(".sh"):
+                        target = (path.parent / relative).resolve()
+                        with self.subTest(action=path.parent.name, step=index, file=relative):
+                            self.assertTrue(target.stat().st_mode & 0o111, f"{target} is not executable")
+
+    def test_every_tracked_shell_script_is_executable(self):
+        # The check above sees only what a step names; this covers a script that
+        # another script runs, and the tests.
+        for script in sorted(ROOT.glob("*/*.sh")):
+            with self.subTest(script=str(script.relative_to(ROOT))):
+                self.assertTrue(script.stat().st_mode & 0o111, f"{script} is not executable")
 
     def test_every_third_party_action_is_pinned_to_a_full_sha(self):
         for path in action_files():
@@ -97,6 +105,19 @@ class ActionFilesTest(unittest.TestCase):
                 if uses is not None:
                     with self.subTest(action=path.parent.name, step=index):
                         self.assertRegex(uses + " ", FULL_SHA, f"{uses} is not pinned to a commit")
+
+    def test_dependabot_reaches_every_action(self):
+        config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+        entries = [u for u in config["updates"] if u["package-ecosystem"] == "github-actions"]
+        self.assertEqual(1, len(entries), "expected one github-actions entry")
+        directories = set(entries[0].get("directories") or [entries[0].get("directory")])
+        self.assertIn("/", directories, "the workflows are not covered")
+        for path in action_files():
+            with self.subTest(action=path.parent.name):
+                self.assertTrue(
+                    "/*" in directories or f"/{path.parent.name}" in directories,
+                    f"Dependabot does not read {path.parent.name}/action.yml",
+                )
 
     def test_every_action_is_listed_in_the_readme(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
