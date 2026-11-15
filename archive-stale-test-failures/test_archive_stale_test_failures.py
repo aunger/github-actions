@@ -189,15 +189,15 @@ class TestFetchStaleIssues(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["number"], 4)
 
-    def test_query_does_not_filter_by_state(self):
-        """The issues query omits state=open so closed issues are also fetched."""
+    def test_query_asks_for_open_and_closed_issues(self):
+        """The issues endpoint defaults to state=open, so the query asks for state=all."""
         with patch.object(
             astf, "gh_api", side_effect=self._gh_api_side_effect([[], []])
         ) as mock_api:
             astf.fetch_stale_issues("owner/repo", "tok", _CUTOFF)
 
         path = mock_api.call_args_list[0][0][0]
-        self.assertNotIn("state=open", path)
+        self.assertIn("state=all", path)
         self.assertIn("labels=test-failure", path)
 
 

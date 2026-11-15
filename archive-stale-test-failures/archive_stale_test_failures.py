@@ -33,6 +33,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
 
+from github_headers import github_headers  # noqa: E402
 from https_only import urlopen_https  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -55,11 +56,7 @@ def gh_api(path: str, token: str, method: str = "GET", body: object = None) -> o
     failure so callers can handle errors explicitly.
     """
     url = f"https://api.github.com/{path}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    headers = github_headers(token)
     if body is not None:
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
@@ -83,7 +80,8 @@ def fetch_stale_issues(repo: str, token: str, cutoff: datetime.datetime) -> list
     page = 1
     while True:
         batch = gh_api(
-            f"repos/{repo}/issues?labels={LABEL_TEST_FAILURE}&per_page=100&page={page}",
+            # The endpoint lists only open issues unless asked for state=all.
+            f"repos/{repo}/issues?labels={LABEL_TEST_FAILURE}&state=all&per_page=100&page={page}",
             token=token,
         )
         if not batch:
