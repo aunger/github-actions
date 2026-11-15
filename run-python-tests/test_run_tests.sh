@@ -177,6 +177,17 @@ run_in "$C" "PYTHON=$C/../fake-python"; rc=$?
 [[ $rc -eq 0 ]] && pass "exits 0" || fail "exit code $rc: $(cat "$C/../out.log")"
 grep -q "^fake-python:-m unittest discover" "$C/../ran.log" && pass "used the named interpreter" || fail "ran: $(ran "$C")"
 
+echo "== (n) TEST_GITHUB_TOKEN reaches the tests as GITHUB_TOKEN, and only when set"
+C="$TMP/n/repo"; mkdir -p "$C"
+printf '#!/usr/bin/env bash\necho "token:${GITHUB_TOKEN:-unset} raw:${TEST_GITHUB_TOKEN:-unset}" >> "$LOG"\n' > "$C/test_env.sh"
+run_in "$C" TEST_GITHUB_TOKEN=secret-value; rc=$?
+[[ $rc -eq 0 ]] && pass "exits 0" || fail "exit code $rc"
+grep -qx "token:secret-value raw:unset" "$C/../ran.log" && pass "exported as GITHUB_TOKEN, input variable unset" \
+    || fail "ran: $(cat "$C/../ran.log")"
+run_in "$C" TEST_GITHUB_TOKEN= GITHUB_TOKEN=from-caller; rc=$?
+grep -qx "token:from-caller raw:unset" "$C/../ran.log" && pass "empty input keeps the caller's GITHUB_TOKEN" \
+    || fail "ran: $(cat "$C/../ran.log")"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

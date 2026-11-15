@@ -26,6 +26,14 @@ inputs:
     description: The interpreter that installs the lock and runs the Python tests.
     required: false
     default: python3
+  github-token:
+    description: >-
+      A token the tests get as GITHUB_TOKEN, for tests that call the GitHub API
+      and skip without one. When empty, GITHUB_TOKEN is whatever the calling
+      step's env sets, if anything. GITHUB_REPOSITORY is always set, by the
+      runner.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -43,5 +51,6 @@ runs:
       env:
         TEST_PATHS: ${{ inputs.paths }}
         TEST_KIND: ${{ inputs.kind }}
+        TEST_GITHUB_TOKEN: ${{ inputs.github-token }}
         PYTHON: ${{ inputs.python }}
       run: '"$GITHUB_ACTION_PATH/run_tests.sh"'

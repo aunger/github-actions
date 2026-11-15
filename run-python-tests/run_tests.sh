@@ -10,6 +10,10 @@
 #   TEST_PATHS  directories to search, one per line (default: .)
 #   TEST_KIND   shell, python or all (default: all)
 #   PYTHON      the interpreter that runs the Python tests (default: python3)
+#   TEST_GITHUB_TOKEN
+#               when set and not empty, exported to the tests as GITHUB_TOKEN,
+#               for tests that call the GitHub API; otherwise GITHUB_TOKEN is
+#               left as the caller's environment has it
 #
 # A single recursive `unittest discover` cannot stand in for the per-directory
 # loop.
@@ -42,6 +46,10 @@ set -euo pipefail
 KIND="${TEST_KIND:-all}"
 PY="${PYTHON:-python3}"
 PATHS="${TEST_PATHS:-.}"
+if [[ -n "${TEST_GITHUB_TOKEN:-}" ]]; then
+    export GITHUB_TOKEN="$TEST_GITHUB_TOKEN"
+fi
+unset TEST_GITHUB_TOKEN
 
 case "$KIND" in
     shell | python | all) ;;
