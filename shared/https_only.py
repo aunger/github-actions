@@ -21,7 +21,10 @@ aunger/dot-and-tilde's plugins carry their own copies, so that they import
 nothing from this repository: github-supplement's `link_gh_issues.py` and
 `verify_github_write.py` (`_after_https_scheme` and `https_request`), and
 orchestrate's `ci_monitor.py` (`_after_https_scheme`, in its own style).
-Change them together.
+A change here is made in github-supplement's copies in the same pass: it lands
+in dot-and-tilde first, then here, together with the bump of the commit
+shared/test_plugin_copies.py compares against to one that carries it.
+ci_monitor.py's copy is not compared.
 
 This module has no `main`; it is imported, not run directly.
 """

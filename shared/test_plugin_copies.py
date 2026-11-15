@@ -11,12 +11,13 @@ repository, so two of its scripts carry copies of what this directory defines:
   strip_bylines(), which must recognize the bylines the strip-session-bylines
   action removes, or the hook reports a mismatch for every byline stripped.
 
-This test fetches dot-and-tilde's main branch and fails when a copy and its
-original stop being the same code, so a change made in one repository and not
-the other turns this repository's CI red: on the pull request that changes the
-original here, or on the next scheduled run after dot-and-tilde changes its
-copy. Where the fetch fails it skips with the reason, except when CI is set,
-where it fails.
+This test fetches dot-and-tilde at PINNED_COMMIT and fails when a copy and its
+original stop being the same code there. A change to one of these modules is
+therefore made in dot-and-tilde first, and lands here together with the bump of
+PINNED_COMMIT to a commit that carries it; the pull request that makes it here
+stays red until both agree. Pinning keeps this repository's CI from changing
+with dot-and-tilde's main. Where the fetch fails the test skips with the
+reason, except when CI is set, where it fails.
 
 Docstrings and comments are left out of the comparison, which is of the parsed
 definitions: each copy's docstring may say where it came from. orchestrate's
@@ -33,7 +34,9 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 UPSTREAM = "https://github.com/aunger/dot-and-tilde.git"
-BRANCH = "main"
+# A commit on dot-and-tilde's main. Move it only to another commit on main,
+# which a merge can not make unreachable.
+PINNED_COMMIT = "b8326e01d584f913eee9568c3ba6c94ecaf22c8e"
 PLUGIN = "plugins/github-supplement"
 GIT_TIMEOUT_SECONDS = 120
 
@@ -59,7 +62,7 @@ class FetchFailed(Exception):
 
 
 def fetch(directory: str) -> "callable":
-    """Fetch the branch into a bare repository; return a function reading one file."""
+    """Fetch PINNED_COMMIT into a bare repository; return a function reading one file."""
     git = shutil.which("git")
     git_dir = os.path.join(directory, "upstream.git")
 
@@ -77,10 +80,10 @@ def fetch(directory: str) -> "callable":
         if git is None:
             raise FileNotFoundError("git is not on PATH")
         run("init", "-q", "--bare", git_dir)
-        run("fetch", "-q", "--depth", "1", UPSTREAM, BRANCH)
+        run("fetch", "-q", "--depth", "1", UPSTREAM, PINNED_COMMIT)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:
         detail = getattr(error, "stderr", None) or error
-        raise FetchFailed(f"could not fetch {UPSTREAM} {BRANCH}: {detail}") from error
+        raise FetchFailed(f"could not fetch {UPSTREAM} at {PINNED_COMMIT}: {detail}") from error
 
     def read(path: str) -> str:
         return run("show", f"FETCH_HEAD:{PLUGIN}/{path}")
@@ -137,8 +140,8 @@ class TestPluginCopies(unittest.TestCase):
                     self.assertEqual(
                         definition_without_docstring(copy, name, path),
                         definition_without_docstring(read_original(module), name, module),
-                        f"{name} in dot-and-tilde's {PLUGIN}/{path} on {BRANCH} differs "
-                        f"from shared/{module}; change both in the same pass",
+                        f"{name} in dot-and-tilde's {PLUGIN}/{path} at {PINNED_COMMIT} "
+                        f"differs from shared/{module}; change both in the same pass",
                     )
 
 

@@ -9,8 +9,9 @@ This module has no `main`; it is imported, not run directly.
 aunger/dot-and-tilde's github-supplement plugin carries two copies, in
 link_gh_issues.py and verify_github_write.py, so that it imports nothing from
 this repository.
-A change here is made there in the same pass, and lands with the pin bump that
-takes it.
+A change here is made there in the same pass: it lands in dot-and-tilde first,
+then here, together with the bump of the commit shared/test_plugin_copies.py
+compares against to one that carries it.
 """
 
 
