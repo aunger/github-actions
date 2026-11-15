@@ -51,4 +51,5 @@ It needs Python 3.11 or later and `bash`.
 
 Three modules in `shared/` have intentional copies in [aunger/dot-and-tilde](https://github.com/aunger/dot-and-tilde)'s `github-supplement` plugin, which imports nothing from here.
 `session_bylines.py`'s byline pattern must match the one in `verify_github_write.py`, so a change to either is made in both in the same pass.
+`shared/test_plugin_copies.py` compares them with dot-and-tilde's `main`, so CI fails when they drift.
 `github_headers.py` and `https_only.py` have copies in `link_gh_issues.py` and `verify_github_write.py` too.
