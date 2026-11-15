@@ -1,0 +1,49 @@
+name: Strip Claude session-URL bylines
+description: >-
+  Remove Claude session-URL bylines (https://claude.ai/code/session_...) from
+  the issue, pull request, comment or review that triggered the workflow, in
+  place, through the GitHub REST API.
+
+# Call it from a workflow triggered by these events, with these permissions:
+#
+#   on:
+#     issues: {types: [opened, edited]}
+#     issue_comment: {types: [created, edited]}
+#     pull_request: {types: [opened, edited]}
+#     pull_request_review_comment: {types: [created, edited]}
+#     pull_request_review: {types: [submitted]}
+#   permissions:
+#     issues: write
+#     pull-requests: write
+#
+# The action runs its own copy of the script, pinned by the commit the caller's
+# `uses:` names, and the caller needs no checkout, so the job never runs code a
+# pull request controls.
+
+inputs:
+  github-token:
+    description: A token with issues and pull-requests write access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    # The edits this action makes are made by github-actions[bot]; skipping that
+    # actor keeps a bot edit from being processed again.
+    - name: Install pinned requirements
+      if: github.actor != 'github-actions[bot]'
+      shell: bash
+      run: >-
+        "$GITHUB_ACTION_PATH/../install-pinned-requirements/install.sh"
+        --venv "$RUNNER_TEMP/strip-session-bylines-venv"
+        "$GITHUB_ACTION_PATH/../requirements.txt"
+
+    - name: Strip session-URL bylines
+      if: github.actor != 'github-actions[bot]'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: >-
+        "$RUNNER_TEMP/strip-session-bylines-venv/bin/python"
+        "$GITHUB_ACTION_PATH/strip_session_bylines.py"
