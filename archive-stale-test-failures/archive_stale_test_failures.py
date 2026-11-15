@@ -27,14 +27,12 @@ Optional environment variables:
 """
 
 import datetime
-import json
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
 
-from github_headers import github_headers  # noqa: E402
-from https_only import urlopen_https  # noqa: E402
+from github_api import gh_api
 
 # ---------------------------------------------------------------------------
 # Label name constants
@@ -42,28 +40,6 @@ from https_only import urlopen_https  # noqa: E402
 
 LABEL_TEST_FAILURE: str = "test-failure"
 LABEL_TEST_FAILURE_ARCHIVE: str = "test-failure-archive"
-
-
-# ---------------------------------------------------------------------------
-# GitHub API helper
-# ---------------------------------------------------------------------------
-
-
-def gh_api(path: str, token: str, method: str = "GET", body: object = None) -> object:
-    """Make a GitHub API request and return the parsed JSON response.
-
-    Raises ``urllib.error.HTTPError`` or ``urllib.error.URLError`` on
-    failure so callers can handle errors explicitly.
-    """
-    url = f"https://api.github.com/{path}"
-    headers = github_headers(token)
-    if body is not None:
-        data = json.dumps(body).encode()
-        headers["Content-Type"] = "application/json"
-    else:
-        data = None
-    with urlopen_https(url, data, headers=headers, method=method) as r:
-        return json.loads(r.read())
 
 
 # ---------------------------------------------------------------------------

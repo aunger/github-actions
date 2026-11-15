@@ -110,8 +110,7 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
 
-from github_headers import github_headers  # noqa: E402
-from https_only import urlopen_https  # noqa: E402
+from github_api import gh_api
 
 HEADS = "refs/branch-report/heads/"
 PULLS = "refs/branch-report/pulls/"
@@ -227,15 +226,6 @@ def delete_branch(repo_dir: str, remote: str, name: str, sha: str) -> str | None
 # ---------------------------------------------------------------------------
 # GitHub API
 # ---------------------------------------------------------------------------
-
-
-def gh_api(path: str, token: str) -> object:
-    """GET *path* from the GitHub REST API and return the parsed JSON."""
-    headers = github_headers(token)
-    if not token:
-        del headers["Authorization"]
-    with urlopen_https(f"https://api.github.com/{path}", headers=headers, timeout=30) as r:
-        return json.loads(r.read())
 
 
 def gh_api_pages(path: str, token: str) -> list[dict]:
