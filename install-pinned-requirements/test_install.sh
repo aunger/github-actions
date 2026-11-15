@@ -86,9 +86,17 @@ fi
 
 echo "== (d) PYTHON picks the interpreter"
 C="$TMP/d"; make_case "$C"
-cp "$C/stub.sh" "$C/bin/other-python"
-if (cd "$C" && PYTHON=other-python PATH="$C/bin:$PATH" "$INSTALL_SH" requirements-fake.txt > "$C/out.log" 2>&1); then
-    [[ -f "$C/calls.log" ]] && pass "ran the interpreter PYTHON names" || fail "stub was not called"
+# A second stub with a log of its own, so a call to the python3 stub cannot
+# pass for a call to this one.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/other.log"\n' "$C" > "$C/bin/other-python"
+chmod +x "$C/bin/other-python"
+if (cd "$C" && PYTHON=other-python PATH="$C/bin:$PATH" GITHUB_OUTPUT="$C/output" \
+    "$INSTALL_SH" requirements-fake.txt > "$C/out.log" 2>&1); then
+    grep -q -- "-m pip install" "$C/other.log" 2>/dev/null && pass "ran pip with the interpreter PYTHON names" \
+        || fail "other-python did not run pip"
+    [[ ! -f "$C/calls.log" ]] && pass "did not run python3" || fail "python3 ran: $(cat "$C/calls.log")"
+    [[ "$(cat "$C/output")" == "python=other-python" ]] && pass "outputs the interpreter PYTHON names" \
+        || fail "GITHUB_OUTPUT was: $(cat "$C/output")"
 else
     fail "installer exited non-zero: $(cat "$C/out.log")"
 fi
