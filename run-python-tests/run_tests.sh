@@ -4,7 +4,8 @@
 # Shell tests are every file named test_*.sh under the search paths, each run
 # with bash.
 # Python tests are every directory under them that holds a test_*.py file, each
-# discovered with `python3 -m unittest discover` on its own.
+# discovered with `python3 -m unittest discover` on its own, except a package
+# directory that another one's discovery already reaches (see below).
 #
 # Environment:
 #   TEST_PATHS  directories to search, one per line (default: .)
@@ -38,7 +39,8 @@
 #
 # Exit codes:
 #   0  every test that ran passed, or none was found
-#   2  wrong usage: an unknown TEST_KIND, or a search path that is not a directory
+#   2  wrong usage (an unknown TEST_KIND, or a search path that is not a
+#      directory), or a search for the tests that failed
 #   any other nonzero code is the exit code of the test that failed
 
 set -euo pipefail
@@ -72,35 +74,73 @@ if [[ ${#roots[@]} -eq 0 ]]; then
     roots=(.)
 fi
 
-# Print every file under the roots whose name matches $1, or with $2 = dirs,
-# the directory of each, skipping dot-directories.
+# Print every file under the roots whose name matches $1, one per line, sorted,
+# skipping dot-directories. -print rather than GNU find's -printf, so BSD find
+# works too. A find that fails makes this fail, which a caller cannot miss: the
+# callers run it in a command substitution, not a process substitution, whose
+# status set -e never sees.
 find_tests() {
-    local pattern="$1" format="$2" root
+    local pattern="$1" root
     for root in "${roots[@]}"; do
         find "$root" -mindepth 1 \( -type d -name '.?*' -prune \) -o \
-            -type f -name "$pattern" -printf "$format"
-    done
+            -type f -name "$pattern" -print || return 1
+    done | sort -u
+}
+
+list_tests() {
+    local listed
+    if ! listed=$(find_tests "$1"); then
+        echo "[run-python-tests] ERROR: could not list $1 under: ${roots[*]}" >&2
+        exit 2
+    fi
+    printf '%s' "$listed"
 }
 
 ran=0
 
+# Each test's stdin is /dev/null: the loops read their list on stdin, and a test
+# that read it would consume the rest of the list, which would then never run.
+
 if [[ "$KIND" == "shell" || "$KIND" == "all" ]]; then
+    shell_tests=$(list_tests 'test_*.sh')
     while IFS= read -r test_script; do
+        [[ -n "$test_script" ]] || continue
         echo "==> Running $test_script"
-        bash "$test_script"
+        bash "$test_script" < /dev/null
         ran=$((ran + 1))
-    done < <(find_tests 'test_*.sh' '%p\n' | sort -u)
+    done <<< "$shell_tests"
 fi
 
+# unittest's discovery recurses into subdirectories that are packages (have an
+# __init__.py), so a package directory whose parent chain of packages reaches
+# another directory in the list is already covered by that directory's run, and
+# is skipped. Any other package directory is discovered with its top level (-t)
+# at its first ancestor that is not a package, so its tests import as members of
+# their package and relative imports resolve.
 if [[ "$KIND" == "python" || "$KIND" == "all" ]]; then
+    python_dirs=$(list_tests 'test_*.py' | sed 's|/[^/]*$||' | sort -u)
     while IFS= read -r dir; do
+        [[ -n "$dir" ]] || continue
+        top="$dir"
+        covered=no
+        while [[ -f "$top/__init__.py" ]]; do
+            top=$(dirname "$top")
+            if grep -Fqx -- "$top" <<< "$python_dirs"; then
+                covered=yes
+                break
+            fi
+        done
+        if [[ $covered == yes ]]; then
+            echo "==> Skipping $dir: a package discovered from $top"
+            continue
+        fi
         echo "==> Discovering tests in $dir"
-        "$PY" -m unittest discover -s "$dir" -p "test_*.py" -v && rc=0 || rc=$?
+        "$PY" -m unittest discover -s "$dir" -t "$top" -p "test_*.py" -v < /dev/null && rc=0 || rc=$?
         if [[ $rc -ne 0 && $rc -ne 5 ]]; then
             exit "$rc"
         fi
         ran=$((ran + 1))
-    done < <(find_tests 'test_*.py' '%h\n' | sort -u)
+    done <<< "$python_dirs"
 fi
 
 if [[ $ran -eq 0 ]]; then

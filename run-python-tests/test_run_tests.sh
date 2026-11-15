@@ -188,6 +188,80 @@ run_in "$C" TEST_GITHUB_TOKEN= GITHUB_TOKEN=from-caller; rc=$?
 grep -qx "token:from-caller raw:unset" "$C/../ran.log" && pass "empty input keeps the caller's GITHUB_TOKEN" \
     || fail "ran: $(cat "$C/../ran.log")"
 
+echo "== (o) a test that reads stdin does not consume the list of tests"
+C="$TMP/o/repo"; mkdir -p "$C/a" "$C/b" "$C/c" "$C/d"
+printf '#!/usr/bin/env bash\ncat > /dev/null\necho "shell:a" >> "$LOG"\n' > "$C/a/test_a.sh"
+shell_test "$C/b/test_b.sh"
+cat > "$C/c/test_reads.py" << 'PYTEST'
+import os
+import sys
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_it(self):
+        sys.stdin.read()
+        with open(os.environ["LOG"], "a") as log:
+            log.write("python:c\n")
+PYTEST
+python_test "$C/d/test_after.py"
+run_in "$C"; rc=$?
+[[ $rc -eq 0 ]] && pass "exits 0" || fail "exit code $rc: $(cat "$C/../out.log")"
+grep -q "test_b.sh" "$C/../ran.log" && pass "the shell test after one that reads stdin runs" || fail "ran: $(ran "$C")"
+grep -q "d/test_after.py" "$C/../ran.log" && pass "the Python directory after one that reads stdin runs" \
+    || fail "ran: $(ran "$C")"
+
+echo "== (p) a search that fails is an error, not 'no tests found'"
+C="$TMP/p/repo"; mkdir -p "$C" "$TMP/p/bin"
+shell_test "$C/test_ok.sh"
+printf '#!/usr/bin/env bash\necho "find: simulated failure" >&2\nexit 1\n' > "$TMP/p/bin/find"
+chmod +x "$TMP/p/bin/find"
+for kind in shell python; do
+    run_in "$C" "PATH=$TMP/p/bin:$PATH" "TEST_KIND=$kind"; rc=$?
+    [[ $rc -eq 2 ]] && pass "$kind: exits 2" || fail "$kind: exit code $rc: $(cat "$C/../out.log")"
+    grep -q "could not list" "$C/../out.log" && pass "$kind: says the search failed" || fail "$kind: output: $(cat "$C/../out.log")"
+done
+[[ ! -s "$C/../ran.log" ]] && pass "ran nothing" || fail "ran: $(ran "$C")"
+if grep -qE -- '^[^#]*-printf' "$RUN_TESTS"; then
+    fail "run_tests.sh uses find -printf, which BSD find lacks"
+else
+    pass "run_tests.sh does not use find -printf"
+fi
+
+echo "== (q) a package that an ancestor's discovery reaches runs once"
+C="$TMP/q/repo"; mkdir -p "$C/pkg/sub"
+python_test "$C/test_top.py"
+: > "$C/pkg/__init__.py"
+: > "$C/pkg/sub/__init__.py"
+printf 'VALUE = 1\n' > "$C/pkg/sub/util.py"
+cat > "$C/pkg/sub/test_relative.py" << 'PYTEST'
+import os
+import unittest
+
+from . import util
+
+
+class T(unittest.TestCase):
+    def test_it(self):
+        self.assertEqual(util.VALUE, 1)
+        with open(os.environ["LOG"], "a") as log:
+            log.write("python:pkg.sub\n")
+PYTEST
+run_in "$C"; rc=$?
+[[ $rc -eq 0 ]] && pass "exits 0" || fail "exit code $rc: $(cat "$C/../out.log")"
+[[ "$(grep -c "^python:pkg.sub$" "$C/../ran.log")" -eq 1 ]] && pass "the package's test ran once" || fail "ran: $(ran "$C")"
+grep -q "Skipping ./pkg/sub" "$C/../out.log" && pass "says it skipped the covered directory" \
+    || fail "output: $(cat "$C/../out.log")"
+
+echo "== (r) a package that no other discovery reaches is run with its package's top level"
+C="$TMP/r/repo"; mkdir -p "$C/pkg"
+: > "$C/pkg/__init__.py"
+printf 'VALUE = 1\n' > "$C/pkg/util.py"
+sed 's/pkg.sub/pkg/' "$TMP/q/repo/pkg/sub/test_relative.py" > "$C/pkg/test_relative.py"
+run_in "$C"; rc=$?
+[[ $rc -eq 0 ]] && pass "exits 0: the relative import resolves" || fail "exit code $rc: $(cat "$C/../out.log")"
+[[ "$(grep -c "^python:pkg$" "$C/../ran.log")" -eq 1 ]] && pass "the package's test ran once" || fail "ran: $(ran "$C")"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
