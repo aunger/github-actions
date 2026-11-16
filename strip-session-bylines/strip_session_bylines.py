@@ -20,8 +20,9 @@ PATCH call.
 
 The strip-session-bylines action runs this module, with github_headers.py
 and session_bylines.py from ../shared.
-It runs from the action's own pinned copy and checks nothing out, so a job that
-calls it never runs code a pull request controls.
+It runs from the action's own pinned copy and checks nothing out. On the three
+pull request events that is no boundary: the calling workflow comes from the
+pull request's merge ref, so a pull request can change what the job runs.
 The action handles five event types:
 
   - issues [opened, edited]:                       issue body
