@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 import strip_session_bylines as ssb
@@ -99,6 +99,13 @@ class TestStripBylines(unittest.TestCase):
         self.assertEqual(ssb.strip_bylines(text), "Line one\nLine two")
 
 
+def empty_response():
+    """A urlopen_https mock whose response has an empty body, as a PATCH/PUT may."""
+    mock = MagicMock()
+    mock.return_value.__enter__.return_value.read.return_value = b""
+    return mock
+
+
 def sent(mock_open):
     """Return the method, URL and body of the one request *mock_open* received."""
     mock_open.assert_called_once()
@@ -107,39 +114,40 @@ def sent(mock_open):
 
 
 class TestUpdate(unittest.TestCase):
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_sends_json_with_the_github_headers(self, mock_open):
-        self.assertTrue(ssb._patch("tok", "https://api.github.com/x", "text"))
-        kwargs = mock_open.call_args[1]
+        self.assertTrue(ssb._update("PATCH", "tok", "repos/o/r/issues/1", "text"))
+        args, kwargs = mock_open.call_args
+        self.assertEqual(args[0], "https://api.github.com/repos/o/r/issues/1")
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer tok")
         self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
-        self.assertEqual(kwargs["timeout"], 30)
+        self.assertEqual(kwargs["method"], "PATCH")
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_an_http_error_returns_false(self, mock_open):
         mock_open.side_effect = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
-        self.assertFalse(ssb._put("tok", "https://api.github.com/x", "text"))
+        self.assertFalse(ssb._update("PUT", "tok", "repos/o/r/x", "text"))
 
 
 class TestFetchBody(unittest.TestCase):
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_returns_the_body(self, mock_open):
         mock_open.return_value.__enter__.return_value.read.return_value = b'{"body": "hi"}'
-        self.assertEqual(ssb._fetch_body("tok", "https://api.github.com/x"), "hi")
+        self.assertEqual(ssb._fetch_body("tok", "x"), "hi")
         args, kwargs = mock_open.call_args
         self.assertEqual(args[0], "https://api.github.com/x")
         self.assertEqual(kwargs["method"], "GET")
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer tok")
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_a_null_body_is_empty(self, mock_open):
         mock_open.return_value.__enter__.return_value.read.return_value = b'{"body": null}'
-        self.assertEqual(ssb._fetch_body("tok", "https://api.github.com/x"), "")
+        self.assertEqual(ssb._fetch_body("tok", "x"), "")
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_an_error_returns_none(self, mock_open):
         mock_open.side_effect = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
-        self.assertIsNone(ssb._fetch_body("tok", "https://api.github.com/x"))
+        self.assertIsNone(ssb._fetch_body("tok", "x"))
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +176,7 @@ class TestHandleIssue(FetchedBody):
         self.fetched = body
         return {"issue": {"number": number, "body": body}}
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_patches_issue_body_when_byline_found(self, mock_open):
         payload = self._payload(7, "Good text\nhttps://claude.ai/code/session_abc")
 
@@ -180,28 +188,28 @@ class TestHandleIssue(FetchedBody):
         self.assertIn("/issues/7", url)
         self.assertEqual(body, "Good text")
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(7, "Just text, no byline.")
         result = ssb.handle_issue("tok", "owner/repo", payload)
         self.assertFalse(result)
         mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_handles_none_body_gracefully(self, mock_open):
         payload = {"issue": {"number": 1, "body": None}}
         result = ssb.handle_issue("tok", "owner/repo", payload)
         self.assertFalse(result)
         mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_returns_false_on_patch_error(self, mock_open):
         mock_open.side_effect = Exception("network")
         payload = self._payload(9, "text\nhttps://claude.ai/code/session_z")
         result = ssb.handle_issue("tok", "owner/repo", payload)
         self.assertFalse(result)
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_strips_the_current_body_not_the_payloads(self, mock_open):
         # A later edit changed the body after this event was sent.
         payload = self._payload(7, "Old text\nhttps://claude.ai/code/session_abc")
@@ -210,9 +218,9 @@ class TestHandleIssue(FetchedBody):
         self.assertTrue(ssb.handle_issue("tok", "owner/repo", payload))
 
         self.assertEqual(sent(mock_open)[2], "New text")
-        self.assertIn("/repos/owner/repo/issues/7", self.fetch.call_args[0][1])
+        self.assertEqual("repos/owner/repo/issues/7", self.fetch.call_args[0][1])
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_skips_when_the_current_body_is_already_clean(self, mock_open):
         # A later edit removed the byline: writing the payload's text back would undo it.
         payload = self._payload(7, "Old text\nhttps://claude.ai/code/session_abc")
@@ -221,7 +229,7 @@ class TestHandleIssue(FetchedBody):
         self.assertFalse(ssb.handle_issue("tok", "owner/repo", payload))
         mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_skips_when_the_fetch_fails(self, mock_open):
         payload = self._payload(7, "text\nhttps://claude.ai/code/session_abc")
         self.fetched = None
@@ -229,7 +237,7 @@ class TestHandleIssue(FetchedBody):
         self.assertFalse(ssb.handle_issue("tok", "owner/repo", payload))
         mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_payload_without_byline_is_not_fetched(self, mock_open):
         ssb.handle_issue("tok", "owner/repo", self._payload(7, "Clean."))
         self.fetch.assert_not_called()
@@ -245,7 +253,7 @@ class TestHandleIssueComment(FetchedBody):
         self.fetched = body
         return {"comment": {"id": comment_id, "body": body}}
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_patches_comment_body_when_byline_found(self, mock_open):
         payload = self._payload(55, "text\nhttps://claude.ai/code/session_foo")
 
@@ -257,7 +265,7 @@ class TestHandleIssueComment(FetchedBody):
         self.assertIn("/issues/comments/55", url)
         self.assertEqual(body, "text")
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(55, "No byline here.")
         result = ssb.handle_issue_comment("tok", "owner/repo", payload)
@@ -275,7 +283,7 @@ class TestHandlePullRequest(FetchedBody):
         self.fetched = body
         return {"pull_request": {"number": number, "body": body}}
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_patches_pr_body_when_byline_found(self, mock_open):
         payload = self._payload(12, "PR body\nhttps://claude.ai/code/session_qqq")
 
@@ -287,14 +295,14 @@ class TestHandlePullRequest(FetchedBody):
         self.assertIn("/pulls/12", url)
         self.assertEqual(body, "PR body")
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(12, "Clean PR body.")
         result = ssb.handle_pull_request("tok", "owner/repo", payload)
         self.assertFalse(result)
         mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_handles_none_body_gracefully(self, mock_open):
         payload = {"pull_request": {"number": 3, "body": None}}
         result = ssb.handle_pull_request("tok", "owner/repo", payload)
@@ -312,7 +320,7 @@ class TestHandlePRReviewComment(FetchedBody):
         self.fetched = body
         return {"comment": {"id": comment_id, "body": body}}
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_patches_review_comment_when_byline_found(self, mock_open):
         payload = self._payload(77, "nit\nhttps://claude.ai/code/session_bar")
 
@@ -324,7 +332,7 @@ class TestHandlePRReviewComment(FetchedBody):
         self.assertIn("/pulls/comments/77", url)
         self.assertEqual(body, "nit")
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(77, "Clean review comment.")
         result = ssb.handle_pull_request_review_comment("tok", "owner/repo", payload)
@@ -345,7 +353,7 @@ class TestHandlePullRequestReview(FetchedBody):
             "pull_request": {"number": pr_number},
         }
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_patches_review_body_when_byline_found(self, mock_open):
         payload = self._payload(88, 42, "Looks good\nhttps://claude.ai/code/session_xyz")
 
@@ -357,21 +365,21 @@ class TestHandlePullRequestReview(FetchedBody):
         self.assertIn("/pulls/42/reviews/88", url)
         self.assertEqual(body, "Looks good")
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_skips_patch_when_no_byline(self, mock_open):
         payload = self._payload(88, 42, "Clean review body.")
         result = ssb.handle_pull_request_review("tok", "owner/repo", payload)
         self.assertFalse(result)
         mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_handles_none_body_gracefully(self, mock_open):
         payload = {"review": {"id": 1, "body": None}, "pull_request": {"number": 5}}
         result = ssb.handle_pull_request_review("tok", "owner/repo", payload)
         self.assertFalse(result)
         mock_open.assert_not_called()
 
-    @patch("strip_session_bylines.urlopen_https")
+    @patch("github_api.urlopen_https", new_callable=empty_response)
     def test_patches_markdown_footer_in_review_body(self, mock_open):
         body = "Review\n---\n_Generated by [Claude Code](https://claude.ai/code/session_abc)_"
         payload = self._payload(100, 50, body)

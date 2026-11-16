@@ -32,8 +32,11 @@ permissions:
   pull-requests: write
 
 # One run at a time per item, so the creation and edit runs of one comment do
-# not race. The script also re-fetches the body before writing, so whichever
-# run goes last writes the current text.
+# not overlap. GitHub keeps at most one pending run per group: a newer event
+# cancels the pending one (it shows as a cancelled run), which is harmless
+# because the script re-fetches the body before writing, so the run that goes
+# last strips the current text. An edit saved by a person between a run's
+# fetch and its write is still overwritten; the API has no conditional update.
 concurrency:
   group: >-
     strip-session-bylines-${{ github.event_name }}-${{ github.event.comment.id
@@ -43,13 +46,16 @@ concurrency:
 
 jobs:
   strip:
-    # Skip the runner entirely for the action's own edits and for text with no
-    # byline. A review with no body falls through to the PR body, which at
-    # worst starts a run that finds nothing.
+    # Skip the runner entirely for text with no byline. A review is judged by
+    # its own body only, so a body-less approval does not fall through to the
+    # PR description. The action's own edits need no check here: writes made
+    # with GITHUB_TOKEN start no workflow runs.
     if: >-
-      github.actor != 'github-actions[bot]' &&
-      contains(github.event.comment.body || github.event.review.body
-      || github.event.pull_request.body || github.event.issue.body, 'claude.ai/code')
+      github.event_name == 'pull_request_review'
+      && contains(github.event.review.body, 'claude.ai/code')
+      || github.event_name != 'pull_request_review'
+      && contains(github.event.comment.body || github.event.pull_request.body
+      || github.event.issue.body, 'claude.ai/code')
     runs-on: ubuntu-latest
     steps:
       # Pinned by SHA because this job holds write scopes. Dependabot's

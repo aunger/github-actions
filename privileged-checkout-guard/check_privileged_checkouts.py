@@ -8,8 +8,8 @@ A job that a pull request can trigger, that holds write permissions, and that
 checks out the pull request's merge ref (the `actions/checkout` default on a
 `pull_request` event) runs code the pull request controls with a token that
 can write.
-Pinning the checkout's `ref:` to the base branch, or dropping the checkout,
-avoids that.
+Pinning the checkout's `ref:` to the base commit or to the default branch, or
+dropping the checkout, avoids that.
 This check keeps a later edit from quietly restoring the default checkout,
 which would break nothing visible and pass every other check.
 
@@ -48,6 +48,13 @@ The rule enforced here
     and whose effective permissions grant any write scope other than
     `security-events`, must pin the `ref:` of every `actions/checkout` step to
     a ref the pull request does not control.
+
+The accepted refs are the pull request's base commit and the repository's
+default branch by name. They differ when a pull request targets another
+branch, or when the default branch has moved since the pull request's last
+push; either is fine here, since neither is pull-request-controlled. On a
+`pull_request` event this is only as strong as described above: the workflow
+file itself still comes from the merge ref.
 
 `security-events: write` is the one exemption, because a CodeQL workflow exists
 precisely to analyze the pull request's code and has to check out the merge
@@ -112,8 +119,10 @@ ACCEPTED_REFS = frozenset(
         "${{ github.event.pull_request.base.sha }}",
         "${{ github.event.pull_request.base.sha || github.sha }}",
         # The repository's default branch by name: its current tip, which no
-        # pull request controls. A job that runs only reviewed code wants this
-        # over base.sha, which is the base as of the pull request's last push.
+        # pull request controls (on a pull_request event, subject to the
+        # workflow-file caveat in the module docstring). A job that runs only
+        # reviewed code wants this over base.sha, which is the base as of the
+        # pull request's last push and may be a non-default branch.
         "${{ github.event.repository.default_branch }}",
     }
 )
