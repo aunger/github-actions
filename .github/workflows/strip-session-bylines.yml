@@ -1,0 +1,39 @@
+name: Strip session bylines
+
+# Runs this repository's own strip-session-bylines action over each issue, pull
+# request, comment and review as it is written or edited.
+#
+# The checkout pins `ref:` to the pull request's base commit, or to github.sha
+# (the default branch) on the issue events, so the script that runs with write
+# permissions is never one a pull request branch supplies. privileged-checkout-
+# guard accepts exactly this ref. On the pull request events GitHub still reads
+# this workflow file from the merge ref; see that guard's docstring for what the
+# pin does and does not achieve.
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+  pull_request:
+    types: [opened, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  strip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Strip session-URL bylines
+        uses: ./strip-session-bylines
