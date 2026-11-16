@@ -22,10 +22,31 @@ updates:
   # same flags; the "pip" ecosystem would not.
   # `dependency-type: all` lets it propose a bump to a package that only the
   # lock names, which is where most advisories land.
+  #
+  # One entry per lock directory, so each lock is reached once (issue #16).
+  # The uv file fetcher reads requirement files from the directory it is given
+  # and from each directory immediately below it, so "/" alone also reaches
+  # dependency-audit/, and compiles that lock with paths relative to "/", which
+  # rewrites its `# via -r requirements-audit.in` lines.
+  # The "/" entry therefore excludes dependency-audit, which its own entry
+  # compiles from where the lock's header says it was made.
+  # The exclusion cannot sit in a shared entry with both directories: the
+  # fetcher matches it against paths from the repository root, so it would hide
+  # dependency-audit/ from the "/dependency-audit" directory as well.
+  #
+  # The groups split each entry's .in pins from everything they pull in, so a
+  # tool bump that needs work cannot hold back a fix to a lock-only package.
+  # python-transitive is `*` minus the pins, so a package a future bump pulls in
+  # joins it without an edit here.
+  # Names are PEP 503-normalized (pyyaml, not PyYAML), the form the uv parser
+  # gives; test_action_files.py checks each entry's lists match its .in files and
+  # that every .in is reached by exactly one entry.
+  # Two groups want at most two pull requests per entry, inside the default limit
+  # of 5, so there is no `open-pull-requests-limit`.
   - package-ecosystem: "uv"
-    directories:
-      - "/"
-      - "/dependency-audit"
+    directory: "/"
+    exclude-paths:
+      - "dependency-audit/**"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -33,3 +54,33 @@ updates:
       timezone: "UTC"
     allow:
       - dependency-type: "all"
+    groups:
+      python-direct:
+        patterns:
+          - "pyyaml"
+      python-transitive:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "pyyaml"
+
+  - package-ecosystem: "uv"
+    directory: "/dependency-audit"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "12:00"
+      timezone: "UTC"
+    allow:
+      - dependency-type: "all"
+    groups:
+      python-direct:
+        patterns:
+          - "pip-audit"
+          - "typing-extensions"
+      python-transitive:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "pip-audit"
+          - "typing-extensions"

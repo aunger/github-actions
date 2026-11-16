@@ -13,6 +13,8 @@ other test would notice, since the actions run only on GitHub:
 - every `uses:` is a full-length commit SHA, so an action here never runs code
   that a tag move can change, and Dependabot's github-actions entry reaches
   every action's directory to bump it;
+- Dependabot's uv entries reach each requirements `.in` once, and each entry's
+  groups split exactly that entry's `.in` pins from the rest;
 - every action is listed in `README.md`.
 """
 
@@ -29,12 +31,38 @@ ROOT = Path(__file__).resolve().parent
 ACTION_PATH_FILE = re.compile(r"\$GITHUB_ACTION_PATH/([A-Za-z0-9_./-]+)")
 FULL_SHA = re.compile(r"@[0-9a-f]{40}(\s|$)")
 EXPRESSION = re.compile(r"\$\{\{")
+PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*==")
 
 
 def action_files() -> list[Path]:
     return sorted(
         path for path in ROOT.glob("*/action.yml") if not path.parent.name.startswith(".")
     )
+
+
+def dependabot_updates() -> list[dict]:
+    config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    return config["updates"]
+
+
+def normalized(name: str) -> str:
+    # PEP 503, the form Dependabot's uv parser gives a dependency's name.
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def uv_reach(entry: dict) -> set[str]:
+    # The uv file fetcher reads the directory it is given and each directory
+    # immediately below it, less what exclude-paths names; `dir/**` is the only
+    # pattern form handled here.
+    base = ROOT / entry["directory"].strip("/")
+    excluded = {pattern.removesuffix("/**").strip("/") for pattern in entry.get("exclude-paths") or []}
+    reached = set()
+    for path in [*base.glob("*.in"), *base.glob("*/*.in")]:
+        relative = path.relative_to(base)
+        if len(relative.parts) == 2 and relative.parts[0] in excluded:
+            continue
+        reached.add(str(path.relative_to(ROOT)))
+    return reached
 
 
 def steps(path: Path) -> list[dict]:
@@ -107,8 +135,7 @@ class ActionFilesTest(unittest.TestCase):
                         self.assertRegex(uses + " ", FULL_SHA, f"{uses} is not pinned to a commit")
 
     def test_dependabot_reaches_every_action(self):
-        config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
-        entries = [u for u in config["updates"] if u["package-ecosystem"] == "github-actions"]
+        entries = [u for u in dependabot_updates() if u["package-ecosystem"] == "github-actions"]
         self.assertEqual(1, len(entries), "expected one github-actions entry")
         directories = set(entries[0].get("directories") or [entries[0].get("directory")])
         self.assertIn("/", directories, "the workflows are not covered")
@@ -118,6 +145,29 @@ class ActionFilesTest(unittest.TestCase):
                     "/*" in directories or f"/{path.parent.name}" in directories,
                     f"Dependabot does not read {path.parent.name}/action.yml",
                 )
+
+    def test_dependabot_uv_entries_reach_each_requirements_in_once(self):
+        entries = [u for u in dependabot_updates() if u["package-ecosystem"] == "uv"]
+        for entry in entries:
+            self.assertIn("directory", entry, "give each uv entry one directory, so it can exclude others")
+        reached = [path for entry in entries for path in sorted(uv_reach(entry))]
+        tracked = sorted(str(p.relative_to(ROOT)) for p in [*ROOT.glob("*.in"), *ROOT.glob("*/*.in")])
+        self.assertEqual(tracked, sorted(reached), "each .in should be reached by exactly one uv entry")
+
+    def test_dependabot_uv_groups_match_the_in_pins(self):
+        for entry in (u for u in dependabot_updates() if u["package-ecosystem"] == "uv"):
+            with self.subTest(directory=entry["directory"]):
+                pins = set()
+                for path in uv_reach(entry):
+                    for line in (ROOT / path).read_text(encoding="utf-8").splitlines():
+                        match = PIN.match(line.split("#", 1)[0].strip())
+                        if match:
+                            pins.add(normalized(match[1]))
+                self.assertTrue(pins, "found no pins")
+                groups = entry["groups"]
+                self.assertEqual(pins, set(groups["python-direct"]["patterns"]))
+                self.assertEqual(["*"], groups["python-transitive"]["patterns"])
+                self.assertEqual(pins, set(groups["python-transitive"]["exclude-patterns"]))
 
     def test_every_action_is_listed_in_the_readme(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
