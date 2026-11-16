@@ -45,6 +45,7 @@ run-python-tests/run_tests.sh
 ```
 
 `.github/workflows/test.yml` does the same through the `run-python-tests` action, and runs `dependency-audit` and `privileged-checkout-guard` over this repository.
+`.github/workflows/strip-session-bylines.yml` runs `strip-session-bylines` on this repository's own issues, pull requests, comments and reviews, with `issues` and `pull-requests` write access.
 It needs Python 3.11 or later and `bash`.
 
 ## Copies in other repositories
