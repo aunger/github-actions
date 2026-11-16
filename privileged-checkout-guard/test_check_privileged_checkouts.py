@@ -58,6 +58,10 @@ jobs:
         pinned = self._with_ref("${{ github.event.pull_request.base.sha }}")
         self.assertEqual([], self._violations(pinned))
 
+    def test_default_branch_checkout_is_accepted(self):
+        pinned = self._with_ref("${{ github.event.repository.default_branch }}")
+        self.assertEqual([], self._violations(pinned))
+
     def test_head_sha_is_reported(self):
         found = self._violations(self._with_ref("${{ github.event.pull_request.head.sha }}"))
         self.assertEqual(1, len(found), found)

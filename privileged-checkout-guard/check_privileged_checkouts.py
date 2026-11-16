@@ -111,6 +111,10 @@ ACCEPTED_REFS = frozenset(
     {
         "${{ github.event.pull_request.base.sha }}",
         "${{ github.event.pull_request.base.sha || github.sha }}",
+        # The repository's default branch by name: its current tip, which no
+        # pull request controls. A job that runs only reviewed code wants this
+        # over base.sha, which is the base as of the pull request's last push.
+        "${{ github.event.repository.default_branch }}",
     }
 )
 

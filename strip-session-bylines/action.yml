@@ -9,12 +9,16 @@ description: >-
 #   on:
 #     issues: {types: [opened, edited]}
 #     issue_comment: {types: [created, edited]}
-#     pull_request: {types: [opened, edited]}
+#     pull_request: {types: [opened, edited]}   # or pull_request_target
 #     pull_request_review_comment: {types: [created, edited]}
-#     pull_request_review: {types: [submitted]}
+#     pull_request_review: {types: [submitted, edited]}
 #   permissions:
 #     issues: write
 #     pull-requests: write
+#
+# This repository's .github/workflows/strip-session-bylines.yml is a worked
+# example that runs a local copy with pull_request_target, a default-branch
+# checkout and a per-item concurrency group.
 #
 # The action runs its own copy of the script, pinned by the commit the caller's
 # `uses:` names, and the caller needs no checkout. On the pull_request,

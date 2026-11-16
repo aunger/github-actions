@@ -1,0 +1,66 @@
+name: Strip session bylines
+
+# Runs this repository's own strip-session-bylines action over each issue, pull
+# request, comment and review as it is written or edited.
+#
+# The checkout takes the default branch by name, so the script that runs with
+# write permissions is the current reviewed one, never one a pull request
+# branch supplies, and never a stale base commit. privileged-checkout-guard
+# accepts this ref.
+#
+# PR descriptions use pull_request_target, which reads this workflow from the
+# base branch, gets a write token on fork pull requests, and runs when a pull
+# request has a merge conflict. The review events have no _target variant: on
+# a fork pull request their token is read-only, so bylines in reviews and
+# review comments there are left in place (the action logs a warning).
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+  pull_request_target:
+    types: [opened, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+# One run at a time per item, so the creation and edit runs of one comment do
+# not race. The script also re-fetches the body before writing, so whichever
+# run goes last writes the current text.
+concurrency:
+  group: >-
+    strip-session-bylines-${{ github.event_name }}-${{ github.event.comment.id
+    || github.event.review.id || github.event.pull_request.number
+    || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  strip:
+    # Skip the runner entirely for the action's own edits and for text with no
+    # byline. A review with no body falls through to the PR body, which at
+    # worst starts a run that finds nothing.
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      contains(github.event.comment.body || github.event.review.body
+      || github.event.pull_request.body || github.event.issue.body, 'claude.ai/code')
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned by SHA because this job holds write scopes. Dependabot's
+      # github-actions entry updates the pin and the version comment.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            strip-session-bylines
+            shared
+
+      - name: Strip session-URL bylines
+        uses: ./strip-session-bylines

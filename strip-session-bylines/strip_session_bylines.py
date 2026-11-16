@@ -15,21 +15,23 @@ both forms.
 
 An optional \n--- separator preceding the Markdown-link footer is consumed
 along with it so no orphaned "---" is left behind.
-If the content is unchanged after stripping, the caller should skip the
-PATCH call.
+The body that is stripped is fetched fresh from the API, not taken from the
+event payload, so a late run cannot write back text older than a later edit.
+If the content is unchanged after stripping, no update is sent.
 
 The strip-session-bylines action runs this module, with github_headers.py
 and session_bylines.py from ../shared.
 It runs from the action's own pinned copy and checks nothing out. On the three
 pull request events that is no boundary: the calling workflow comes from the
 pull request's merge ref, so a pull request can change what the job runs.
-The action handles five event types:
+The action handles five event types (pull_request_target is handled as
+pull_request):
 
   - issues [opened, edited]:                       issue body
   - issue_comment [created, edited]:               comments on issues and PRs
   - pull_request [opened, edited]:                 PR body
   - pull_request_review_comment [created, edited]: PR diff-line comments
-  - pull_request_review [submitted]:               PR review body
+  - pull_request_review [submitted, edited]:       PR review body
 
 Usage:
     python3 strip_session_bylines.py
@@ -38,7 +40,8 @@ Environment variables (the action sets GITHUB_TOKEN; the runner sets the rest):
     GITHUB_TOKEN          GitHub token with issues:write and pull-requests:write.
     GITHUB_REPOSITORY     "owner/repo".
     GITHUB_EVENT_NAME     One of: issues, issue_comment, pull_request,
-                          pull_request_review_comment, pull_request_review.
+                          pull_request_target, pull_request_review_comment,
+                          pull_request_review.
     GITHUB_EVENT_PATH     Path to the JSON file with the full event payload.
 
 Exit code is always 0 so a missing/failed strip never breaks the caller.
@@ -94,102 +97,90 @@ def _put(token: str, url: str, body: str) -> bool:
     return _update("put", token, url, body)
 
 
+def _fetch_body(token: str, url: str) -> str | None:
+    """GET *url* and return its "body" field ("" if empty), or None on failure."""
+    try:
+        with urlopen_https(url, headers=github_headers(token), method="GET", timeout=30) as response:
+            return json.loads(response.read()).get("body") or ""
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: GET {url} failed: {exc}", file=sys.stderr)
+        return None
+
+
+def _strip(token: str, url: str, method: str, label: str, payload_body: str | None) -> bool:
+    """Strip bylines from the item at *url*.  Returns True if an update was issued.
+
+    The payload's body only decides whether to look further: an event whose
+    body carries no byline needs no API call.  The body that is stripped and
+    written back is the one fetched from *url*, because the payload's copy can
+    be older than the stored one: a run for an item's creation that finishes
+    after the run for its edit would otherwise write the older text back.
+    """
+    payload_body = payload_body or ""
+    if strip_bylines(payload_body) == payload_body:
+        print(f"{label}: no bylines found, skipping.")
+        return False
+
+    current = _fetch_body(token, url)
+    if current is None:
+        return False
+    stripped = strip_bylines(current)
+    if stripped == current:
+        print(f"{label}: no bylines in the current body, skipping.")
+        return False
+
+    ok = _update(method, token, url, stripped)
+    if ok:
+        print(f"{label}: bylines stripped.")
+    return ok
+
+
 def handle_issue(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from an issue body.  Returns True if a PATCH was issued."""
     issue = payload.get("issue", {})
     number = issue.get("number")
-    body = issue.get("body") or ""
-
-    stripped = strip_bylines(body)
-    if stripped == body:
-        print(f"Issue #{number}: no bylines found, skipping.")
-        return False
-
     url = f"https://api.github.com/repos/{repository}/issues/{number}"
-    ok = _patch(token, url, stripped)
-    if ok:
-        print(f"Issue #{number}: bylines stripped.")
-    return ok
+    return _strip(token, url, "patch", f"Issue #{number}", issue.get("body"))
 
 
 def handle_issue_comment(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from an issue/PR comment.  Returns True if a PATCH was issued."""
     comment = payload.get("comment", {})
     comment_id = comment.get("id")
-    body = comment.get("body") or ""
-
-    stripped = strip_bylines(body)
-    if stripped == body:
-        print(f"Comment #{comment_id}: no bylines found, skipping.")
-        return False
-
     url = f"https://api.github.com/repos/{repository}/issues/comments/{comment_id}"
-    ok = _patch(token, url, stripped)
-    if ok:
-        print(f"Comment #{comment_id}: bylines stripped.")
-    return ok
+    return _strip(token, url, "patch", f"Comment #{comment_id}", comment.get("body"))
 
 
 def handle_pull_request(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from a PR body.  Returns True if a PATCH was issued."""
     pr = payload.get("pull_request", {})
     number = pr.get("number")
-    body = pr.get("body") or ""
-
-    stripped = strip_bylines(body)
-    if stripped == body:
-        print(f"PR #{number}: no bylines found, skipping.")
-        return False
-
     url = f"https://api.github.com/repos/{repository}/pulls/{number}"
-    ok = _patch(token, url, stripped)
-    if ok:
-        print(f"PR #{number}: bylines stripped.")
-    return ok
+    return _strip(token, url, "patch", f"PR #{number}", pr.get("body"))
 
 
 def handle_pull_request_review_comment(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from a PR review comment.  Returns True if a PATCH was issued."""
     comment = payload.get("comment", {})
     comment_id = comment.get("id")
-    body = comment.get("body") or ""
-
-    stripped = strip_bylines(body)
-    if stripped == body:
-        print(f"Review comment #{comment_id}: no bylines found, skipping.")
-        return False
-
     url = f"https://api.github.com/repos/{repository}/pulls/comments/{comment_id}"
-    ok = _patch(token, url, stripped)
-    if ok:
-        print(f"Review comment #{comment_id}: bylines stripped.")
-    return ok
+    return _strip(token, url, "patch", f"Review comment #{comment_id}", comment.get("body"))
 
 
 def handle_pull_request_review(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from a PR review body.  Returns True if a PUT was issued."""
     review = payload.get("review", {})
-    pr = payload.get("pull_request", {})
+    pr_number = payload.get("pull_request", {}).get("number")
     review_id = review.get("id")
-    pr_number = pr.get("number")
-    body = review.get("body") or ""
-
-    stripped = strip_bylines(body)
-    if stripped == body:
-        print(f"Review #{review_id}: no bylines found, skipping.")
-        return False
-
     url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/reviews/{review_id}"
-    ok = _put(token, url, stripped)
-    if ok:
-        print(f"Review #{review_id}: bylines stripped.")
-    return ok
+    return _strip(token, url, "put", f"Review #{review_id}", review.get("body"))
 
 
 _HANDLER_NAMES = {
     "issues": "handle_issue",
     "issue_comment": "handle_issue_comment",
     "pull_request": "handle_pull_request",
+    "pull_request_target": "handle_pull_request",
     "pull_request_review_comment": "handle_pull_request_review_comment",
     "pull_request_review": "handle_pull_request_review",
 }
