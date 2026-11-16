@@ -42,7 +42,8 @@ updates:
   # a package that is really transitive, so it stays in python-transitive.
   # Names are PEP 503-normalized (pyyaml, not PyYAML), the form the uv parser
   # gives; test_action_files.py checks each entry's lists match its .in pins
-  # (less its WORKAROUND_PINS) and that every .in is reached by exactly one entry.
+  # (less its WORKAROUND_PINS) and that every requirements .in and lock is
+  # reached by exactly one entry.
   # Two groups want at most two pull requests per entry, inside the default limit
   # of 5, so there is no `open-pull-requests-limit`.
   - package-ecosystem: "uv"

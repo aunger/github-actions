@@ -13,8 +13,9 @@ other test would notice, since the actions run only on GitHub:
 - every `uses:` is a full-length commit SHA, so an action here never runs code
   that a tag move can change, and Dependabot's github-actions entry reaches
   every action's directory to bump it;
-- Dependabot's uv entries reach each requirements `.in` once, and each entry's
-  groups split that entry's `.in` pins (less its WORKAROUND_PINS) from the rest;
+- Dependabot's uv entries reach each requirements `.in` and lock once, and each
+  entry's groups split that entry's `.in` pins (less its WORKAROUND_PINS) from
+  the rest;
 - every action is listed in `README.md`.
 """
 
@@ -22,6 +23,7 @@ import fnmatch
 import functools
 import posixpath
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -57,13 +59,18 @@ def dependabot_updates() -> list[dict]:
 
 
 @functools.cache
-def in_files() -> tuple[str, ...]:
-    # Every requirements `.in` at any depth, as root-relative paths, outside
-    # hidden directories. The uv fetcher takes any file whose name contains
-    # "requirements" (requirements_file?); other `.in` files, such as a
-    # MANIFEST.in, it reads only if their content looks like requirements.
-    found = audit_requirements.discover_locks(ROOT, "**/*requirements*.in")
-    return tuple(p.relative_to(ROOT).as_posix() for p in found)
+def requirement_files() -> tuple[str, ...]:
+    # Every tracked requirements `.in` and `.txt` lock at any depth, as
+    # root-relative paths: what Dependabot sees, which leaves out untracked
+    # files such as a virtualenv's. The uv fetcher takes any `.in` or `.txt`
+    # whose name contains "requirements" (requirements_file?); others, such as
+    # a MANIFEST.in, it reads only if their content looks like requirements,
+    # which is not modeled here.
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*requirements*.in", "*requirements*.txt"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    return tuple(sorted(name for name in listed.split("\0") if name))
 
 
 def dependabot_excludes(path: str, patterns: list[str]) -> bool:
@@ -74,8 +81,10 @@ def dependabot_excludes(path: str, patterns: list[str]) -> bool:
     # as fnmatchcase's does, and with it, where `**/` also matches no directory,
     # as glob_regex's does.
     for pattern in patterns:
-        if "{" in pattern:
-            raise AssertionError(f"exclude-paths pattern {pattern!r}: braces are not modeled here")
+        if "{" in pattern or "[" in pattern:
+            raise AssertionError(
+                f"exclude-paths pattern {pattern!r}: braces and bracket classes are not modeled here"
+            )
         for candidate in {pattern, posixpath.normpath(pattern.rstrip("/")).lstrip("/")}:
             base = candidate.removesuffix("/**")
             if (
@@ -97,7 +106,7 @@ def uv_reach(entry: dict) -> set[str]:
     directory = entry["directory"].strip("/")
     patterns = entry.get("exclude-paths") or []
     reached = set()
-    for path in in_files():
+    for path in requirement_files():
         parent = posixpath.dirname(path)
         if parent == directory:
             listed = [path]
@@ -111,7 +120,10 @@ def uv_reach(entry: dict) -> set[str]:
 
 
 def in_pins(path: str) -> set[str]:
-    text = (ROOT / path).read_text(encoding="utf-8")
+    # parse_pins skips indented lines, which in a lock are hashes and `# via`
+    # comments; pip and uv strip the indent from an `.in`'s lines, so this does too.
+    lines = (ROOT / path).read_text(encoding="utf-8").splitlines()
+    text = "\n".join(line.lstrip() for line in lines)
     try:
         return {pin.name for pin in audit_requirements.parse_pins(text, path)}
     except audit_requirements.AuditError as error:
@@ -209,9 +221,9 @@ class ActionFilesTest(unittest.TestCase):
             self.assertIn("directory", entry, "give each uv entry one directory, so it can exclude others")
         return entries
 
-    def test_dependabot_uv_entries_reach_each_in_once(self):
+    def test_dependabot_uv_entries_reach_each_requirements_file_once(self):
         reaches = {e["directory"]: uv_reach(e) for e in self.uv_entries()}
-        for path in in_files():
+        for path in requirement_files():
             with self.subTest(file=path):
                 reaching = [directory for directory, reach in reaches.items() if path in reach]
                 self.assertEqual(1, len(reaching), f"reached by {reaching or 'no uv entry'}")
@@ -221,9 +233,13 @@ class ActionFilesTest(unittest.TestCase):
             with self.subTest(directory=entry["directory"]):
                 direct = set()
                 for path in uv_reach(entry):
-                    direct |= in_pins(path) - WORKAROUND_PINS.get(path, set())
+                    if path.endswith(".in"):
+                        direct |= in_pins(path) - WORKAROUND_PINS.get(path, set())
                 self.assertTrue(direct, "found no direct pins")
-                groups = entry["groups"]
+                groups = entry.get("groups") or {}
+                for name, key in (("python-direct", "patterns"), ("python-transitive", "patterns"),
+                                  ("python-transitive", "exclude-patterns")):
+                    self.assertIn(key, groups.get(name) or {}, f"groups: needs {name} with {key}")
                 self.assertEqual(direct, set(groups["python-direct"]["patterns"]))
                 self.assertEqual(["*"], groups["python-transitive"]["patterns"])
                 self.assertEqual(direct, set(groups["python-transitive"]["exclude-patterns"]))
