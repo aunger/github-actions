@@ -13,12 +13,15 @@ other test would notice, since the actions run only on GitHub:
 - every `uses:` is a full-length commit SHA, so an action here never runs code
   that a tag move can change, and Dependabot's github-actions entry reaches
   every action's directory to bump it;
-- Dependabot's uv entries reach each requirements `.in` once, and each entry's
-  groups split exactly that entry's `.in` pins from the rest;
+- Dependabot's uv entries reach each `.in` once, and each entry's groups split
+  that entry's `.in` pins from the rest;
 - every action is listed in `README.md`.
 """
 
+import fnmatch
+import posixpath
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -26,12 +29,19 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent
 
+sys.path.insert(0, str(ROOT / "dependency-audit"))
+import audit_requirements  # noqa: E402
+
 # A step reaches a file in the repository through $GITHUB_ACTION_PATH, which is
 # the action's own directory, so `../x/y.sh` is a sibling action's file.
 ACTION_PATH_FILE = re.compile(r"\$GITHUB_ACTION_PATH/([A-Za-z0-9_./-]+)")
 FULL_SHA = re.compile(r"@[0-9a-f]{40}(\s|$)")
 EXPRESSION = re.compile(r"\$\{\{")
-PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*==")
+
+# Pins an `.in` carries only to work around Dependabot's uv parser, for a
+# package that is really transitive (requirements-audit.in says why). They
+# belong in python-transitive, so a tool bump cannot hold them back.
+WORKAROUND_PINS = {"typing-extensions"}
 
 
 def action_files() -> list[Path]:
@@ -45,24 +55,61 @@ def dependabot_updates() -> list[dict]:
     return config["updates"]
 
 
-def normalized(name: str) -> str:
-    # PEP 503, the form Dependabot's uv parser gives a dependency's name.
-    return re.sub(r"[-_.]+", "-", name).lower()
+def in_files() -> list[str]:
+    # Every `.in` at any depth, as root-relative paths, outside hidden directories.
+    return [p.relative_to(ROOT).as_posix() for p in audit_requirements.discover_locks(ROOT, "**/*.in")]
+
+
+def dependabot_excludes(path: str, patterns: list[str]) -> bool:
+    # dependabot-core's FileFiltering.exclude_path?, which filter_excluded
+    # applies to each listed path, relative to the repository root whatever the
+    # entry's directory: an exact or directory-prefix match, `dir/**`, or a
+    # glob. Ruby's fnmatch is tried with and without FNM_PATHNAME, so `*`
+    # effectively crosses `/`, as fnmatchcase's does.
+    for pattern in patterns:
+        if "{" in pattern:
+            raise AssertionError(f"exclude-paths pattern {pattern!r}: braces are not modeled here")
+        for candidate in {pattern, posixpath.normpath(pattern.rstrip("/")).lstrip("/")}:
+            base = candidate.removesuffix("/**")
+            if path == base or path.startswith(base + "/") or fnmatch.fnmatchcase(path, candidate):
+                return True
+    return False
 
 
 def uv_reach(entry: dict) -> set[str]:
-    # The uv file fetcher reads the directory it is given and each directory
-    # immediately below it, less what exclude-paths names; `dir/**` is the only
-    # pattern form handled here.
-    base = ROOT / entry["directory"].strip("/")
-    excluded = {pattern.removesuffix("/**").strip("/") for pattern in entry.get("exclude-paths") or []}
+    # The uv file fetcher lists the directory it is given and each directory
+    # immediately below it, and filter_excluded drops a listed subdirectory or
+    # file that exclude-paths matches. Files that a `-r` or `-c` line pulls in
+    # are fetched without that filter; parse_pins rejects such lines, so the
+    # group test fails rather than miss one.
+    directory = entry["directory"].strip("/")
+    patterns = entry.get("exclude-paths") or []
     reached = set()
-    for path in [*base.glob("*.in"), *base.glob("*/*.in")]:
-        relative = path.relative_to(base)
-        if len(relative.parts) == 2 and relative.parts[0] in excluded:
+    for path in in_files():
+        parent = posixpath.dirname(path)
+        if parent == directory:
+            listed = [path]
+        elif posixpath.dirname(parent) == directory:
+            listed = [parent, path]
+        else:
             continue
-        reached.add(str(path.relative_to(ROOT)))
+        if not any(dependabot_excludes(item, patterns) for item in listed):
+            reached.add(path)
     return reached
+
+
+def uv_pins(entry: dict) -> set[str]:
+    pins = set()
+    for path in sorted(uv_reach(entry)):
+        text = (ROOT / path).read_text(encoding="utf-8")
+        try:
+            pins.update(pin.name for pin in audit_requirements.parse_pins(text, path))
+        except audit_requirements.AuditError as error:
+            raise AssertionError(
+                f"{error} (an extras pin, or a -r/-c include, which Dependabot fetches "
+                "even from an excluded path, is not modeled here)"
+            ) from error
+    return pins
 
 
 def steps(path: Path) -> list[dict]:
@@ -146,28 +193,34 @@ class ActionFilesTest(unittest.TestCase):
                     f"Dependabot does not read {path.parent.name}/action.yml",
                 )
 
-    def test_dependabot_uv_entries_reach_each_requirements_in_once(self):
+    def uv_entries(self) -> list[dict]:
         entries = [u for u in dependabot_updates() if u["package-ecosystem"] == "uv"]
         for entry in entries:
             self.assertIn("directory", entry, "give each uv entry one directory, so it can exclude others")
-        reached = [path for entry in entries for path in sorted(uv_reach(entry))]
-        tracked = sorted(str(p.relative_to(ROOT)) for p in [*ROOT.glob("*.in"), *ROOT.glob("*/*.in")])
-        self.assertEqual(tracked, sorted(reached), "each .in should be reached by exactly one uv entry")
+        return entries
+
+    def test_dependabot_uv_entries_reach_each_in_once(self):
+        entries = self.uv_entries()
+        for path in in_files():
+            with self.subTest(file=path):
+                reaching = [e["directory"] for e in entries if path in uv_reach(e)]
+                self.assertEqual(1, len(reaching), f"reached by {reaching or 'no uv entry'}")
 
     def test_dependabot_uv_groups_match_the_in_pins(self):
-        for entry in (u for u in dependabot_updates() if u["package-ecosystem"] == "uv"):
+        all_pins = set()
+        for entry in self.uv_entries():
             with self.subTest(directory=entry["directory"]):
-                pins = set()
-                for path in uv_reach(entry):
-                    for line in (ROOT / path).read_text(encoding="utf-8").splitlines():
-                        match = PIN.match(line.split("#", 1)[0].strip())
-                        if match:
-                            pins.add(normalized(match[1]))
+                pins = uv_pins(entry)
                 self.assertTrue(pins, "found no pins")
+                all_pins |= pins
+                direct = pins - WORKAROUND_PINS
                 groups = entry["groups"]
-                self.assertEqual(pins, set(groups["python-direct"]["patterns"]))
+                self.assertEqual(direct, set(groups["python-direct"]["patterns"]))
                 self.assertEqual(["*"], groups["python-transitive"]["patterns"])
-                self.assertEqual(pins, set(groups["python-transitive"]["exclude-patterns"]))
+                self.assertEqual(direct, set(groups["python-transitive"]["exclude-patterns"]))
+        self.assertLessEqual(
+            WORKAROUND_PINS, all_pins, "a WORKAROUND_PINS entry is no longer pinned; drop it"
+        )
 
     def test_every_action_is_listed_in_the_readme(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
