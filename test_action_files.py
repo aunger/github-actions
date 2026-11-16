@@ -60,17 +60,27 @@ def dependabot_updates() -> list[dict]:
 
 @functools.cache
 def requirement_files() -> tuple[str, ...]:
-    # Every tracked requirements `.in` and `.txt` lock at any depth, as
-    # root-relative paths: what Dependabot sees, which leaves out untracked
-    # files such as a virtualenv's. The uv fetcher takes any `.in` or `.txt`
-    # whose name contains "requirements" (requirements_file?); others, such as
-    # a MANIFEST.in, it reads only if their content looks like requirements,
-    # which is not modeled here.
-    listed = subprocess.run(
-        ["git", "ls-files", "-z", "--", "*requirements*.in", "*requirements*.txt"],
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    ).stdout
-    return tuple(sorted(name for name in listed.split("\0") if name))
+    # Every requirements `.in` and `.txt` lock at any depth, as root-relative
+    # paths, found as the audit action finds locks (by file name, outside hidden
+    # directories). The uv fetcher takes any `.in` or `.txt` whose name contains
+    # "requirements" (requirements_file?); others, such as a MANIFEST.in, it
+    # reads only if their content looks like requirements, which is not modeled
+    # here.
+    # Dependabot sees only committed files, so where git can say which files
+    # are tracked, the rest (a virtualenv's, say) are left out.
+    found = sorted(
+        path.relative_to(ROOT).as_posix()
+        for glob in ("**/*requirements*.in", "**/*requirements*.txt")
+        for path in audit_requirements.discover_locks(ROOT, glob)
+    )
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return tuple(found)
+    tracked = set(listed.split("\0"))
+    return tuple(path for path in found if path in tracked)
 
 
 def dependabot_excludes(path: str, patterns: list[str]) -> bool:
@@ -121,9 +131,10 @@ def uv_reach(entry: dict) -> set[str]:
 
 def in_pins(path: str) -> set[str]:
     # parse_pins skips indented lines, which in a lock are hashes and `# via`
-    # comments; pip and uv strip the indent from an `.in`'s lines, so this does too.
-    lines = (ROOT / path).read_text(encoding="utf-8").splitlines()
-    text = "\n".join(line.lstrip() for line in lines)
+    # comments; pip and uv strip the indent from an `.in`'s lines, so this does
+    # too, after joining a line that ends in a backslash to the one it continues.
+    joined = (ROOT / path).read_text(encoding="utf-8").replace("\\\n", " ")
+    text = "\n".join(line.lstrip() for line in joined.splitlines())
     try:
         return {pin.name for pin in audit_requirements.parse_pins(text, path)}
     except audit_requirements.AuditError as error:
@@ -235,8 +246,9 @@ class ActionFilesTest(unittest.TestCase):
                 for path in uv_reach(entry):
                     if path.endswith(".in"):
                         direct |= in_pins(path) - WORKAROUND_PINS.get(path, set())
-                self.assertTrue(direct, "found no direct pins")
-                groups = entry.get("groups") or {}
+                self.assertTrue(direct, "reaches no .in pins (a lock with no .in is not modeled)")
+                groups = entry.get("groups")
+                self.assertIsInstance(groups, dict, "groups: needs python-direct and python-transitive")
                 for name, key in (("python-direct", "patterns"), ("python-transitive", "patterns"),
                                   ("python-transitive", "exclude-patterns")):
                     self.assertIn(key, groups.get(name) or {}, f"groups: needs {name} with {key}")
