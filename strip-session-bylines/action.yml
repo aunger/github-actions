@@ -17,8 +17,10 @@ description: >-
 #     pull-requests: write
 #
 # The action runs its own copy of the script, pinned by the commit the caller's
-# `uses:` names, and the caller needs no checkout, so the job never runs code a
-# pull request controls.
+# `uses:` names, and the caller needs no checkout. On the pull_request,
+# pull_request_review and pull_request_review_comment events that is no
+# boundary: GitHub reads the calling workflow from the pull request's merge ref,
+# so a pull request can repoint the `uses:` line or add a step of its own.
 
 inputs:
   github-token:
