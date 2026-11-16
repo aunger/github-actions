@@ -35,13 +35,10 @@ inputs:
 runs:
   using: composite
   steps:
-    # Writes made with GITHUB_TOKEN start no workflow runs, so the action's own
-    # edits are not processed again whatever this says; the actor check is a
-    # backstop. A caller passing a personal token instead gets runs for its
-    # edits, which then find nothing to strip.
+    # The action's own edits start no new runs when made with GITHUB_TOKEN, and
+    # find nothing to strip when made with another token, so no actor check.
     # The script uses only the standard library, so nothing is installed first.
     - name: Strip session-URL bylines
-      if: github.actor != 'github-actions[bot]'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}

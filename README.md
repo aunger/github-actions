@@ -27,7 +27,7 @@ Each action's `action.yml` documents its inputs, and the permissions and trigger
 ## Layout
 
 - `<action>/action.yml`, the script it runs, and that script's tests.
-- `shared/` holds the modules more than one script imports: `github_headers.py`, `https_only.py` and `session_bylines.py`.
+- `shared/` holds the modules more than one script imports: `github_api.py`, `github_headers.py`, `https_only.py` and `session_bylines.py`.
   An action reaches them by relative path, which works because a `uses:` fetches this whole repository at the pinned commit.
 - `requirements.in` and `requirements.txt` are the Python dependencies of the scripts, as a hash-pinned lock.
   `dependency-audit/requirements-audit.in` and `.txt` are the lock for `pip-audit` alone.

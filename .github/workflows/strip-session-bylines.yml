@@ -35,8 +35,8 @@ permissions:
 # not overlap. GitHub keeps at most one pending run per group: a newer event
 # cancels the pending one (it shows as a cancelled run), which is harmless
 # because the script re-fetches the body before writing, so the run that goes
-# last strips the current text. An edit saved by a person between a run's
-# fetch and its write is still overwritten; the API has no conditional update.
+# last strips the current text (see _strip in the script for what the re-fetch
+# does not cover).
 concurrency:
   group: >-
     strip-session-bylines-${{ github.event_name }}-${{ github.event.comment.id

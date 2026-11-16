@@ -16,9 +16,7 @@ both forms.
 An optional \n--- separator preceding the Markdown-link footer is consumed
 along with it so no orphaned "---" is left behind.
 The body that is stripped is fetched fresh from the API, not taken from the
-event payload, so a late run does not write back text older than an edit that
-was saved before it fetched. An edit saved between that fetch and the write is
-still lost: the REST API offers no conditional update.
+event payload; _strip says why, and what that does not cover.
 If the content is unchanged after stripping, no update is sent.
 
 The strip-session-bylines action runs this module, with github_api.py and
@@ -28,9 +26,11 @@ runs that pinned copy and checks nothing out. On the pull_request,
 pull_request_review and pull_request_review_comment events that is no
 boundary: the calling workflow comes from the pull request's merge ref, so a
 pull request can change what the job runs.
-This repository's own workflow instead checks out the default branch and runs
-the local copy, and takes PR descriptions from pull_request_target, whose
-workflow file comes from the base branch.
+This repository's own workflow checks out the default branch and runs the
+local copy. That is a boundary only for PR descriptions, which it takes from
+pull_request_target, whose workflow file comes from the base branch. Its review
+and review-comment runs still read the workflow from the merge ref, so a pull
+request from a branch in this repository can change what they run.
 The action handles five event types (pull_request_target is handled as
 pull_request):
 
@@ -73,6 +73,10 @@ def _update(method: str, token: str, path: str, body: str) -> bool:
     """Send {"body": body} to *path* with *method* ("PATCH" or "PUT"); True on success."""
     try:
         gh_api(path, token, method=method, body={"body": body})
+        return True
+    except json.JSONDecodeError:
+        # The write got a 2xx (gh_api raises before parsing otherwise), so it
+        # was applied; only the echoed object, which is discarded, was unreadable.
         return True
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: {method} {path} failed: {exc}", file=sys.stderr)
