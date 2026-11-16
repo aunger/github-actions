@@ -2,7 +2,8 @@ name: Strip Claude session-URL bylines
 description: >-
   Remove Claude session-URL bylines (https://claude.ai/code/session_...) from
   the issue, pull request, comment or review that triggered the workflow, in
-  place, through the GitHub REST API.
+  place, through the GitHub REST API. Given a number, it instead cleans that
+  whole issue or pull request: its description and every comment and review.
 
 # Call it from a workflow triggered by these events, with these permissions:
 #
@@ -15,6 +16,20 @@ description: >-
 #   permissions:
 #     issues: write
 #     pull-requests: write
+#
+# To clean bylines written before the workflow existed, or missed by it, give
+# the `number` input from a workflow_dispatch run, whose payload names no item:
+#
+#   on:
+#     workflow_dispatch:
+#       inputs:
+#         number: {description: Issue or pull request number, required: true, type: number}
+#   ...
+#       with:
+#         number: ${{ inputs.number }}
+#
+# With a number, the event is ignored, and a bad number or a failed read or
+# write fails the step; without one, the step never fails.
 #
 # This repository's .github/workflows/strip-session-bylines.yml is a worked
 # example that runs a local copy with pull_request_target, a default-branch
@@ -31,6 +46,13 @@ inputs:
     description: A token with issues and pull-requests write access.
     required: false
     default: ${{ github.token }}
+  number:
+    description: >-
+      An issue or pull request number. When given, the triggering event is
+      ignored, and bylines are stripped from that item's description, every
+      issue comment and, for a pull request, every review comment and review.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -43,4 +65,5 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        STRIP_NUMBER: ${{ inputs.number }}
       run: python3 "$GITHUB_ACTION_PATH/strip_session_bylines.py"

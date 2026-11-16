@@ -386,6 +386,179 @@ class TestHandlePullRequestReview(FetchedBody):
 
 
 # ---------------------------------------------------------------------------
+# strip_whole_item--manual mode
+# ---------------------------------------------------------------------------
+
+BYLINE = "\nhttps://claude.ai/code/session_abc"
+
+
+class FakeApi:
+    """Answers gh_api paths from *routes*: a dict, or a list of pages for a list endpoint."""
+
+    def __init__(self, routes):
+        self.routes = routes
+        self.paths = []
+
+    def __call__(self, path, token):
+        self.paths.append(path)
+        base, _, query = path.partition("?")
+        answer = self.routes.get(base, [])
+        if isinstance(answer, dict):
+            return answer
+        page = int(dict(q.split("=") for q in query.split("&"))["page"]) if query else 1
+        return answer[page - 1] if page <= len(answer) else []
+
+
+def writes(mock_open):
+    """Return (method, url, body) for every request *mock_open* received."""
+    return [
+        (call.kwargs["method"], call.args[0], json.loads(call.args[1])["body"])
+        for call in mock_open.call_args_list
+    ]
+
+
+API = "https://api.github.com/repos/o/r"
+
+
+class TestStripWholeItem(unittest.TestCase):
+    def run_with(self, routes, number=5):
+        self.api = FakeApi(routes)
+        with patch("strip_session_bylines.gh_api", self.api), patch(
+            "strip_session_bylines.urlopen_https"
+        ) as mock_open:
+            ok = ssb.strip_whole_item("tok", "o/r", number)
+        return ok, writes(mock_open)
+
+    def test_issue_body_and_comments(self):
+        ok, sent_ = self.run_with(
+            {
+                "repos/o/r/issues/5": {"number": 5, "body": "Issue" + BYLINE},
+                "repos/o/r/issues/5/comments": [
+                    [{"id": 1, "body": "clean"}, {"id": 2, "body": "dirty" + BYLINE}]
+                ],
+            }
+        )
+        self.assertTrue(ok)
+        self.assertEqual(
+            [
+                ("PATCH", f"{API}/issues/5", "Issue"),
+                ("PATCH", f"{API}/issues/comments/2", "dirty"),
+            ],
+            sent_,
+        )
+
+    def test_an_issue_reads_no_pull_request_lists(self):
+        self.run_with({"repos/o/r/issues/5": {"number": 5, "body": ""}})
+        self.assertFalse(any("/pulls/" in path for path in self.api.paths))
+
+    def test_pull_request_items(self):
+        ok, sent_ = self.run_with(
+            {
+                "repos/o/r/issues/5": {"number": 5, "body": "PR" + BYLINE, "pull_request": {}},
+                "repos/o/r/issues/5/comments": [[{"id": 1, "body": "c" + BYLINE}]],
+                "repos/o/r/pulls/5/comments": [[{"id": 2, "body": "rc" + BYLINE}]],
+                "repos/o/r/pulls/5/reviews": [
+                    [
+                        {"id": 3, "body": "r" + BYLINE},
+                        {"id": 4, "body": ""},
+                        {"id": 6, "body": None},
+                        {"id": 7, "body": "clean review"},
+                    ]
+                ],
+            }
+        )
+        self.assertTrue(ok)
+        self.assertEqual(
+            [
+                ("PATCH", f"{API}/pulls/5", "PR"),
+                ("PATCH", f"{API}/issues/comments/1", "c"),
+                ("PATCH", f"{API}/pulls/comments/2", "rc"),
+                ("PUT", f"{API}/pulls/5/reviews/3", "r"),
+            ],
+            sent_,
+        )
+
+    def test_reads_every_page(self):
+        first = [{"id": i, "body": "clean"} for i in range(ssb.PER_PAGE)]
+        ok, sent_ = self.run_with(
+            {
+                "repos/o/r/issues/5": {"number": 5, "body": "", "pull_request": {}},
+                "repos/o/r/issues/5/comments": [first, [{"id": 500, "body": "c" + BYLINE}]],
+                "repos/o/r/pulls/5/comments": [
+                    [{"id": 600 + i, "body": "clean"} for i in range(ssb.PER_PAGE)],
+                    [{"id": 700, "body": "rc" + BYLINE}],
+                ],
+                "repos/o/r/pulls/5/reviews": [
+                    [{"id": 800 + i, "body": "clean"} for i in range(ssb.PER_PAGE)],
+                    [{"id": 900, "body": "r" + BYLINE}],
+                ],
+            }
+        )
+        self.assertTrue(ok)
+        self.assertEqual(
+            [
+                ("PATCH", f"{API}/issues/comments/500", "c"),
+                ("PATCH", f"{API}/pulls/comments/700", "rc"),
+                ("PUT", f"{API}/pulls/5/reviews/900", "r"),
+            ],
+            sent_,
+        )
+        self.assertIn("repos/o/r/issues/5/comments?per_page=100&page=2", self.api.paths)
+        # A short page is the last: no third page is asked for.
+        self.assertNotIn("repos/o/r/issues/5/comments?per_page=100&page=3", self.api.paths)
+
+    def test_a_full_last_page_ends_at_the_empty_one(self):
+        full = [{"id": i, "body": "clean"} for i in range(ssb.PER_PAGE)]
+        ok, sent_ = self.run_with(
+            {
+                "repos/o/r/issues/5": {"number": 5, "body": ""},
+                "repos/o/r/issues/5/comments": [full],
+            }
+        )
+        self.assertTrue(ok)
+        self.assertEqual([], sent_)
+        self.assertEqual(
+            [
+                "repos/o/r/issues/5",
+                "repos/o/r/issues/5/comments?per_page=100&page=1",
+                "repos/o/r/issues/5/comments?per_page=100&page=2",
+            ],
+            self.api.paths,
+        )
+
+    def test_nothing_to_strip_sends_nothing(self):
+        ok, sent_ = self.run_with({"repos/o/r/issues/5": {"number": 5, "body": None}})
+        self.assertTrue(ok)
+        self.assertEqual([], sent_)
+
+    def test_a_failed_read_returns_false_and_writes_nothing(self):
+        def failing(path, token):
+            if path.startswith("repos/o/r/issues/5/comments"):
+                raise urllib.error.HTTPError("u", 500, "Server Error", {}, None)
+            return {"number": 5, "body": "Issue" + BYLINE}
+
+        with patch("strip_session_bylines.gh_api", side_effect=failing), patch(
+            "strip_session_bylines.urlopen_https"
+        ) as mock_open:
+            self.assertFalse(ssb.strip_whole_item("tok", "o/r", 5))
+        mock_open.assert_not_called()
+
+    def test_a_failed_write_returns_false_and_the_rest_are_still_tried(self):
+        self.api = FakeApi(
+            {
+                "repos/o/r/issues/5": {"number": 5, "body": "Issue" + BYLINE},
+                "repos/o/r/issues/5/comments": [[{"id": 2, "body": "dirty" + BYLINE}]],
+            }
+        )
+        with patch("strip_session_bylines.gh_api", self.api), patch(
+            "strip_session_bylines.urlopen_https"
+        ) as mock_open:
+            mock_open.side_effect = [Exception("network"), mock_open.return_value]
+            self.assertFalse(ssb.strip_whole_item("tok", "o/r", 5))
+        self.assertEqual(2, mock_open.call_count)
+
+
+# ---------------------------------------------------------------------------
 # main--environment and dispatch
 # ---------------------------------------------------------------------------
 
@@ -544,6 +717,46 @@ class TestMain(unittest.TestCase):
                 self.assertEqual(ssb.main([]), 0)
         finally:
             os.unlink(path)
+        mock_handler.assert_called_once_with("tok", "owner/repo", payload)
+
+
+    @patch("strip_session_bylines.strip_whole_item", return_value=True)
+    def test_a_number_selects_manual_mode_and_ignores_the_event(self, mock_strip):
+        env = self._env(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_EVENT_PATH="", STRIP_NUMBER="12")
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(ssb.main([]), 0)
+        mock_strip.assert_called_once_with("tok", "owner/repo", 12)
+
+    @patch("strip_session_bylines.strip_whole_item", return_value=False)
+    def test_manual_mode_fails_when_the_strip_fails(self, mock_strip):
+        with patch.dict(os.environ, self._env(STRIP_NUMBER="12"), clear=True):
+            self.assertEqual(ssb.main([]), 1)
+
+    @patch("strip_session_bylines.strip_whole_item")
+    def test_manual_mode_rejects_a_bad_number(self, mock_strip):
+        for bad in ["0", "-3", "1.5", "12abc", "\u0661"]:
+            with self.subTest(number=bad):
+                with patch.dict(os.environ, self._env(STRIP_NUMBER=bad), clear=True):
+                    self.assertEqual(ssb.main([]), 1)
+        mock_strip.assert_not_called()
+
+    @patch("strip_session_bylines.strip_whole_item")
+    def test_manual_mode_fails_without_a_token(self, mock_strip):
+        with patch.dict(os.environ, self._env(GITHUB_TOKEN="", STRIP_NUMBER="12"), clear=True):
+            self.assertEqual(ssb.main([]), 1)
+        mock_strip.assert_not_called()
+
+    @patch("strip_session_bylines.handle_issue")
+    @patch("strip_session_bylines.strip_whole_item")
+    def test_an_empty_number_keeps_event_mode(self, mock_strip, mock_handler):
+        payload = {"issue": {"number": 1, "body": "body"}}
+        path = self._write_payload(payload)
+        try:
+            with patch.dict(os.environ, self._env(GITHUB_EVENT_PATH=path, STRIP_NUMBER=""), clear=True):
+                self.assertEqual(ssb.main([]), 0)
+        finally:
+            os.unlink(path)
+        mock_strip.assert_not_called()
         mock_handler.assert_called_once_with("tok", "owner/repo", payload)
 
 
