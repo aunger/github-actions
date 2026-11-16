@@ -41,9 +41,11 @@ permissions:
   issues: write
   pull-requests: write
 
-# One run at a time per item, so the creation and edit runs of one comment do
-# not race. The script also re-fetches the body before writing, so whichever
-# run goes last writes the current text.
+# One run at a time per event type and item, so the creation and edit runs of
+# one comment do not race. A manual run has a group of its own, so it can
+# overlap event runs on the same issue or pull request; that is safe because
+# the script, in both modes, re-fetches each body just before writing it, so
+# whichever run goes last writes the current text.
 concurrency:
   group: >-
     strip-session-bylines-${{ github.event_name }}-${{ inputs.number

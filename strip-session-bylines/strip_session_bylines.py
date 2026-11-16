@@ -37,7 +37,7 @@ Manual mode: when STRIP_NUMBER names an issue or pull request, the event is
 ignored and the whole item is cleaned instead: its description, every issue
 comment and, for a pull request, every diff-line review comment and every
 review body.  Each list is read page by page, and only items whose body
-changes are written.  This is for bylines written before the workflow existed
+changes are written, each fetched again just before, as in event mode.  This is for bylines written before the workflow existed
 or missed by it, from a workflow_dispatch run, whose payload names no item.
 
 Usage:
@@ -119,73 +119,100 @@ def _fetch_body(token: str, url: str) -> str | None:
         return None
 
 
-def _strip(token: str, url: str, method: str, label: str, payload_body: str | None) -> bool:
-    """Strip bylines from the item at *url*.  Returns True if an update was issued.
+# Each kind of item: its endpoint under repos/{repo}/, the method that edits
+# its body, and its label in the log.  Both modes build their URLs from here.
+_ENDPOINTS = {
+    "issue": ("issues/{number}", "patch", "Issue #{number}"),
+    "pr": ("pulls/{number}", "patch", "PR #{number}"),
+    "comment": ("issues/comments/{id}", "patch", "Comment #{id}"),
+    "review_comment": ("pulls/comments/{id}", "patch", "Review comment #{id}"),
+    "review": ("pulls/{number}/reviews/{id}", "put", "Review #{id}"),
+}
 
-    The payload's body only decides whether to look further: an event whose
-    body carries no byline needs no API call.  The body that is stripped and
-    written back is the one fetched from *url*, because the payload's copy can
-    be older than the stored one: a run for an item's creation that finishes
-    after the run for its edit would otherwise write the older text back.
+UNCHANGED, STRIPPED, FAILED = "unchanged", "stripped", "failed"
+
+
+def _strip_item(
+    token: str, repository: str, kind: str, known_body: str | None, quiet: bool = False, **ids
+) -> str:
+    """Strip bylines from one item of *kind*, named by *ids*.
+
+    Returns UNCHANGED, STRIPPED, or FAILED if a read or write failed.
+
+    *known_body* (from an event payload or a list just read) only decides
+    whether to look further: a body with no byline needs no API call, and with
+    *quiet* is not logged.  The body that is stripped and written back is
+    fetched afresh, because the known copy can be older than the stored one: a
+    run for an item's creation that finishes after the run for its edit, or a
+    manual run that listed a comment before someone edited it, would otherwise
+    write the older text back.
     """
-    payload_body = payload_body or ""
-    if strip_bylines(payload_body) == payload_body:
-        print(f"{label}: no bylines found, skipping.")
-        return False
+    path, method, label = _ENDPOINTS[kind]
+    url = f"https://api.github.com/repos/{repository}/" + path.format(**ids)
+    label = label.format(**ids)
+
+    known_body = known_body or ""
+    if strip_bylines(known_body) == known_body:
+        if not quiet:
+            print(f"{label}: no bylines found, skipping.")
+        return UNCHANGED
 
     current = _fetch_body(token, url)
     if current is None:
-        return False
+        return FAILED
     stripped = strip_bylines(current)
     if stripped == current:
         print(f"{label}: no bylines in the current body, skipping.")
-        return False
+        return UNCHANGED
 
-    ok = _update(method, token, url, stripped)
-    if ok:
-        print(f"{label}: bylines stripped.")
-    return ok
+    if not _update(method, token, url, stripped):
+        return FAILED
+    print(f"{label}: bylines stripped.")
+    return STRIPPED
 
 
 def handle_issue(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from an issue body.  Returns True if a PATCH was issued."""
     issue = payload.get("issue", {})
-    number = issue.get("number")
-    url = f"https://api.github.com/repos/{repository}/issues/{number}"
-    return _strip(token, url, "patch", f"Issue #{number}", issue.get("body"))
+    outcome = _strip_item(token, repository, "issue", issue.get("body"), number=issue.get("number"))
+    return outcome == STRIPPED
 
 
 def handle_issue_comment(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from an issue/PR comment.  Returns True if a PATCH was issued."""
     comment = payload.get("comment", {})
-    comment_id = comment.get("id")
-    url = f"https://api.github.com/repos/{repository}/issues/comments/{comment_id}"
-    return _strip(token, url, "patch", f"Comment #{comment_id}", comment.get("body"))
+    outcome = _strip_item(token, repository, "comment", comment.get("body"), id=comment.get("id"))
+    return outcome == STRIPPED
 
 
 def handle_pull_request(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from a PR body.  Returns True if a PATCH was issued."""
     pr = payload.get("pull_request", {})
-    number = pr.get("number")
-    url = f"https://api.github.com/repos/{repository}/pulls/{number}"
-    return _strip(token, url, "patch", f"PR #{number}", pr.get("body"))
+    outcome = _strip_item(token, repository, "pr", pr.get("body"), number=pr.get("number"))
+    return outcome == STRIPPED
 
 
 def handle_pull_request_review_comment(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from a PR review comment.  Returns True if a PATCH was issued."""
     comment = payload.get("comment", {})
-    comment_id = comment.get("id")
-    url = f"https://api.github.com/repos/{repository}/pulls/comments/{comment_id}"
-    return _strip(token, url, "patch", f"Review comment #{comment_id}", comment.get("body"))
+    outcome = _strip_item(
+        token, repository, "review_comment", comment.get("body"), id=comment.get("id")
+    )
+    return outcome == STRIPPED
 
 
 def handle_pull_request_review(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from a PR review body.  Returns True if a PUT was issued."""
     review = payload.get("review", {})
-    pr_number = payload.get("pull_request", {}).get("number")
-    review_id = review.get("id")
-    url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/reviews/{review_id}"
-    return _strip(token, url, "put", f"Review #{review_id}", review.get("body"))
+    outcome = _strip_item(
+        token,
+        repository,
+        "review",
+        review.get("body"),
+        number=payload.get("pull_request", {}).get("number"),
+        id=review.get("id"),
+    )
+    return outcome == STRIPPED
 
 
 # ---------------------------------------------------------------------------
@@ -195,89 +222,63 @@ def handle_pull_request_review(token: str, repository: str, payload: dict) -> bo
 PER_PAGE = 100
 
 
-def _pages(path: str, token: str) -> list[dict]:
-    """GET every page of the list at *path* (which has no query string yet).
+def _pages(path: str, token: str):
+    """Yield every item of the list at *path* (which has no query string yet).
 
-    A page shorter than PER_PAGE is the last one.
+    Pages are read as they are needed, so an item is written before the next
+    page is read.  A page shorter than PER_PAGE is the last one.
     Raises what gh_api raises.
     """
-    items: list[dict] = []
     page = 1
     while True:
         batch = gh_api(f"{path}?per_page={PER_PAGE}&page={page}", token) or []
-        items.extend(batch)
+        yield from batch
         if len(batch) < PER_PAGE:
-            return items
+            return
         page += 1
-
-
-def _strip_current(token: str, url: str, method: str, label: str, body: str | None) -> bool:
-    """Write *body* back to *url* without its bylines, if it has any.
-
-    Returns False only if a write was needed and failed.
-    *body* was just read from the API, so it is not fetched again.
-    """
-    body = body or ""
-    stripped = strip_bylines(body)
-    if stripped == body:
-        return True
-    ok = _update(method, token, url, stripped)
-    if ok:
-        print(f"{label}: bylines stripped.")
-    return ok
 
 
 def strip_whole_item(token: str, repository: str, number: int) -> bool:
     """Strip bylines from issue or PR *number* and everything written on it.
 
-    Returns True if every read and every needed write succeeded.
+    The description is cleaned first, then each list in turn, so a failure
+    part way through keeps what was already done.  Returns True if every read
+    and every needed write succeeded.
     """
-    api = f"https://api.github.com/repos/{repository}"
     try:
         issue = gh_api(f"repos/{repository}/issues/{number}", token)
-        # The issues endpoint serves pull requests too, marked by this key.
-        is_pr = "pull_request" in issue
-        comments = _pages(f"repos/{repository}/issues/{number}/comments", token)
-        review_comments = (
-            _pages(f"repos/{repository}/pulls/{number}/comments", token) if is_pr else []
-        )
-        reviews = _pages(f"repos/{repository}/pulls/{number}/reviews", token) if is_pr else []
     except Exception as exc:  # noqa: BLE001
         print(f"Error: could not read #{number}: {exc}", file=sys.stderr)
         return False
+    # The issues endpoint serves pull requests too, marked by this key.
+    is_pr = "pull_request" in issue
 
-    kind = "PR" if is_pr else "Issue"
-    print(
-        f"{kind} #{number}: {len(comments)} comments"
-        + (f", {len(review_comments)} review comments, {len(reviews)} reviews" if is_pr else "")
-        + "."
+    outcome = _strip_item(
+        token, repository, "pr" if is_pr else "issue", issue.get("body"), number=number
     )
+    ok = outcome != FAILED
 
-    targets = [
-        (
-            f"{api}/pulls/{number}" if is_pr else f"{api}/issues/{number}",
-            "patch",
-            f"{kind} #{number}",
-            issue.get("body"),
-        )
-    ]
-    targets += [
-        (f"{api}/issues/comments/{c['id']}", "patch", f"Comment #{c['id']}", c.get("body"))
-        for c in comments
-    ]
-    targets += [
-        (f"{api}/pulls/comments/{c['id']}", "patch", f"Review comment #{c['id']}", c.get("body"))
-        for c in review_comments
-    ]
-    targets += [
-        (f"{api}/pulls/{number}/reviews/{r['id']}", "put", f"Review #{r['id']}", r.get("body"))
-        for r in reviews
-        if r.get("body")  # A review with no body has nothing to strip.
-    ]
-
-    ok = True
-    for url, method, label, body in targets:
-        ok = _strip_current(token, url, method, label, body) and ok
+    lists = [("comment", f"issues/{number}/comments")]
+    if is_pr:
+        # Reviews with no body pass the byline check untouched.
+        lists += [
+            ("review_comment", f"pulls/{number}/comments"),
+            ("review", f"pulls/{number}/reviews"),
+        ]
+    for kind, path in lists:
+        count = 0
+        try:
+            for item in _pages(f"repos/{repository}/{path}", token):
+                count += 1
+                outcome = _strip_item(
+                    token, repository, kind, item.get("body"),
+                    quiet=True, number=number, id=item["id"],
+                )
+                ok = outcome != FAILED and ok
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error: could not read {path}: {exc}", file=sys.stderr)
+            ok = False
+        print(f"#{number}: {count} items read from {path}.")
     return ok
 
 

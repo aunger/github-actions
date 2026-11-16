@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 import strip_session_bylines as ssb
@@ -390,6 +390,7 @@ class TestHandlePullRequestReview(FetchedBody):
 # ---------------------------------------------------------------------------
 
 BYLINE = "\nhttps://claude.ai/code/session_abc"
+API = "https://api.github.com/repos/o/r"
 
 
 class FakeApi:
@@ -403,6 +404,8 @@ class FakeApi:
         self.paths.append(path)
         base, _, query = path.partition("?")
         answer = self.routes.get(base, [])
+        if isinstance(answer, Exception):
+            raise answer
         if isinstance(answer, dict):
             return answer
         page = int(dict(q.split("=") for q in query.split("&"))["page"]) if query else 1
@@ -417,16 +420,32 @@ def writes(mock_open):
     ]
 
 
-API = "https://api.github.com/repos/o/r"
-
-
 class TestStripWholeItem(unittest.TestCase):
-    def run_with(self, routes, number=5):
+    def run_with(self, routes, current=None, write_errors=()):
+        """Run strip_whole_item(5) against *routes*.
+
+        *current* maps a URL to the body a fresh fetch returns; a URL not in it
+        returns the body as listed, found by matching the URL's last part.
+        """
         self.api = FakeApi(routes)
+        listed = {}
+        for answer in routes.values():
+            items = [answer] if isinstance(answer, dict) else [i for page in answer for i in page]
+            for item in items:
+                listed[str(item.get("id", item.get("number")))] = item.get("body")
+        current = current or {}
+        self.fetched = []
+
+        def fetch(token, url):
+            self.fetched.append(url)
+            return current[url] if url in current else listed[url.rsplit("/", 1)[1]]
+
         with patch("strip_session_bylines.gh_api", self.api), patch(
-            "strip_session_bylines.urlopen_https"
-        ) as mock_open:
-            ok = ssb.strip_whole_item("tok", "o/r", number)
+            "strip_session_bylines._fetch_body", side_effect=fetch
+        ), patch("strip_session_bylines.urlopen_https") as mock_open:
+            if write_errors:
+                mock_open.side_effect = list(write_errors)
+            ok = ssb.strip_whole_item("tok", "o/r", 5)
         return ok, writes(mock_open)
 
     def test_issue_body_and_comments(self):
@@ -446,6 +465,8 @@ class TestStripWholeItem(unittest.TestCase):
             ],
             sent_,
         )
+        # Only the items with a byline are fetched again.
+        self.assertEqual([f"{API}/issues/5", f"{API}/issues/comments/2"], self.fetched)
 
     def test_an_issue_reads_no_pull_request_lists(self):
         self.run_with({"repos/o/r/issues/5": {"number": 5, "body": ""}})
@@ -478,12 +499,31 @@ class TestStripWholeItem(unittest.TestCase):
             sent_,
         )
 
+    def test_strips_the_current_body_not_the_listed_one(self):
+        # Someone edited comment 2 after the list was read.
+        ok, sent_ = self.run_with(
+            {
+                "repos/o/r/issues/5": {"number": 5, "body": ""},
+                "repos/o/r/issues/5/comments": [
+                    [{"id": 2, "body": "old" + BYLINE}, {"id": 3, "body": "old" + BYLINE}]
+                ],
+            },
+            current={
+                f"{API}/issues/comments/2": "new" + BYLINE,
+                f"{API}/issues/comments/3": "new, byline removed by hand",
+            },
+        )
+        self.assertTrue(ok)
+        self.assertEqual([("PATCH", f"{API}/issues/comments/2", "new")], sent_)
+
     def test_reads_every_page(self):
-        first = [{"id": i, "body": "clean"} for i in range(ssb.PER_PAGE)]
         ok, sent_ = self.run_with(
             {
                 "repos/o/r/issues/5": {"number": 5, "body": "", "pull_request": {}},
-                "repos/o/r/issues/5/comments": [first, [{"id": 500, "body": "c" + BYLINE}]],
+                "repos/o/r/issues/5/comments": [
+                    [{"id": i, "body": "clean"} for i in range(ssb.PER_PAGE)],
+                    [{"id": 500, "body": "c" + BYLINE}],
+                ],
                 "repos/o/r/pulls/5/comments": [
                     [{"id": 600 + i, "body": "clean"} for i in range(ssb.PER_PAGE)],
                     [{"id": 700, "body": "rc" + BYLINE}],
@@ -508,11 +548,12 @@ class TestStripWholeItem(unittest.TestCase):
         self.assertNotIn("repos/o/r/issues/5/comments?per_page=100&page=3", self.api.paths)
 
     def test_a_full_last_page_ends_at_the_empty_one(self):
-        full = [{"id": i, "body": "clean"} for i in range(ssb.PER_PAGE)]
         ok, sent_ = self.run_with(
             {
                 "repos/o/r/issues/5": {"number": 5, "body": ""},
-                "repos/o/r/issues/5/comments": [full],
+                "repos/o/r/issues/5/comments": [
+                    [{"id": i, "body": "clean"} for i in range(ssb.PER_PAGE)]
+                ],
             }
         )
         self.assertTrue(ok)
@@ -531,31 +572,45 @@ class TestStripWholeItem(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual([], sent_)
 
-    def test_a_failed_read_returns_false_and_writes_nothing(self):
-        def failing(path, token):
-            if path.startswith("repos/o/r/issues/5/comments"):
-                raise urllib.error.HTTPError("u", 500, "Server Error", {}, None)
-            return {"number": 5, "body": "Issue" + BYLINE}
+    def test_a_failed_description_read_returns_false_and_writes_nothing(self):
+        error = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+        ok, sent_ = self.run_with({"repos/o/r/issues/5": error})
+        self.assertFalse(ok)
+        self.assertEqual([], sent_)
 
-        with patch("strip_session_bylines.gh_api", side_effect=failing), patch(
-            "strip_session_bylines.urlopen_https"
-        ) as mock_open:
-            self.assertFalse(ssb.strip_whole_item("tok", "o/r", 5))
-        mock_open.assert_not_called()
+    def test_a_failed_list_read_keeps_the_work_done_and_goes_on(self):
+        error = urllib.error.HTTPError("u", 500, "Server Error", {}, None)
+        ok, sent_ = self.run_with(
+            {
+                "repos/o/r/issues/5": {"number": 5, "body": "PR" + BYLINE, "pull_request": {}},
+                "repos/o/r/issues/5/comments": error,
+                "repos/o/r/pulls/5/comments": [[{"id": 2, "body": "rc" + BYLINE}]],
+            }
+        )
+        self.assertFalse(ok)
+        self.assertEqual(
+            [("PATCH", f"{API}/pulls/5", "PR"), ("PATCH", f"{API}/pulls/comments/2", "rc")],
+            sent_,
+        )
 
     def test_a_failed_write_returns_false_and_the_rest_are_still_tried(self):
-        self.api = FakeApi(
+        ok, sent_ = self.run_with(
             {
                 "repos/o/r/issues/5": {"number": 5, "body": "Issue" + BYLINE},
                 "repos/o/r/issues/5/comments": [[{"id": 2, "body": "dirty" + BYLINE}]],
-            }
+            },
+            write_errors=[Exception("network"), MagicMock()],
         )
-        with patch("strip_session_bylines.gh_api", self.api), patch(
-            "strip_session_bylines.urlopen_https"
-        ) as mock_open:
-            mock_open.side_effect = [Exception("network"), mock_open.return_value]
+        self.assertFalse(ok)
+        self.assertEqual(2, len(sent_))
+
+    def test_a_failed_fetch_returns_false(self):
+        with patch("strip_session_bylines._fetch_body", return_value=None), patch(
+            "strip_session_bylines.gh_api",
+            FakeApi({"repos/o/r/issues/5": {"number": 5, "body": "Issue" + BYLINE}}),
+        ), patch("strip_session_bylines.urlopen_https") as mock_open:
             self.assertFalse(ssb.strip_whole_item("tok", "o/r", 5))
-        self.assertEqual(2, mock_open.call_count)
+        mock_open.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -719,10 +774,11 @@ class TestMain(unittest.TestCase):
             os.unlink(path)
         mock_handler.assert_called_once_with("tok", "owner/repo", payload)
 
-
     @patch("strip_session_bylines.strip_whole_item", return_value=True)
     def test_a_number_selects_manual_mode_and_ignores_the_event(self, mock_strip):
-        env = self._env(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_EVENT_PATH="", STRIP_NUMBER="12")
+        env = self._env(
+            GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_EVENT_PATH="", STRIP_NUMBER="12"
+        )
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(ssb.main([]), 0)
         mock_strip.assert_called_once_with("tok", "owner/repo", 12)
@@ -752,7 +808,8 @@ class TestMain(unittest.TestCase):
         payload = {"issue": {"number": 1, "body": "body"}}
         path = self._write_payload(payload)
         try:
-            with patch.dict(os.environ, self._env(GITHUB_EVENT_PATH=path, STRIP_NUMBER=""), clear=True):
+            env = self._env(GITHUB_EVENT_PATH=path, STRIP_NUMBER="")
+            with patch.dict(os.environ, env, clear=True):
                 self.assertEqual(ssb.main([]), 0)
         finally:
             os.unlink(path)
