@@ -21,6 +21,7 @@ other test would notice, since the actions run only on GitHub:
 
 import fnmatch
 import functools
+import os
 import posixpath
 import re
 import subprocess
@@ -60,27 +61,34 @@ def dependabot_updates() -> list[dict]:
 
 @functools.cache
 def requirement_files() -> tuple[str, ...]:
-    # Every requirements `.in` and `.txt` lock at any depth, as root-relative
-    # paths, found as the audit action finds locks (by file name, outside hidden
-    # directories). The uv fetcher takes any `.in` or `.txt` whose name contains
-    # "requirements" (requirements_file?); others, such as a MANIFEST.in, it
-    # reads only if their content looks like requirements, which is not modeled
-    # here.
-    # Dependabot sees only committed files, so where git can say which files
-    # are tracked, the rest (a virtualenv's, say) are left out.
-    found = sorted(
-        path.relative_to(ROOT).as_posix()
-        for glob in ("**/*requirements*.in", "**/*requirements*.txt")
-        for path in audit_requirements.discover_locks(ROOT, glob)
-    )
+    # Every tracked file the uv fetcher could take as a requirements file: a
+    # `.in` or `.txt` (REQUIREMENT_FILE_PATTERNS) whose path has "requirements"
+    # in it, or a uv.lock, at any depth, hidden directories included, as
+    # root-relative paths. Which entry reaches which is uv_reach's job.
+    # Dependabot sees only committed files, so the list comes from git; only
+    # without a usable git does it fall back to walking the tree.
     try:
         listed = subprocess.run(
             ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, check=True
-        ).stdout
+        ).stdout.split("\0")
     except (OSError, subprocess.CalledProcessError):
-        return tuple(found)
-    tracked = set(listed.split("\0"))
-    return tuple(path for path in found if path in tracked)
+        listed = []
+        for top, dirs, names in os.walk(ROOT):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            listed += [(Path(top) / name).relative_to(ROOT).as_posix() for name in names]
+    else:
+        if not any(listed):
+            raise AssertionError(f"git tracks no files under {ROOT}; run the tests from a checkout")
+    return tuple(sorted(path for path in listed if looks_like_requirements(path)))
+
+
+def looks_like_requirements(name: str) -> bool:
+    # The name test filter_requirement_files applies, with the name relative to
+    # the entry's directory: requirements_file? matches /requirements/ against
+    # the whole relative path, not only the file name. A `.in` or `.txt` that
+    # passes only because its content looks like requirements is not modeled.
+    base = posixpath.basename(name)
+    return base == "uv.lock" or (base.endswith((".in", ".txt")) and "requirements" in name)
 
 
 def dependabot_excludes(path: str, patterns: list[str]) -> bool:
@@ -110,9 +118,11 @@ def dependabot_excludes(path: str, patterns: list[str]) -> bool:
 def uv_reach(entry: dict) -> set[str]:
     # The uv file fetcher lists the directory it is given and each directory
     # immediately below it, and filter_excluded drops a listed subdirectory or
-    # file that exclude-paths matches. Files that a `-r` or `-c` line pulls in
-    # are fetched without that filter; parse_pins rejects such lines, so the
-    # group test fails rather than miss one.
+    # file that exclude-paths matches, by its path from the repository root.
+    # fetch_files then drops whatever exclude-paths matches by its name,
+    # relative to the directory, from the files it collected, `-r` and `-c`
+    # children included. parse_pins rejects `-r` and `-c` lines, so the group
+    # test fails on one rather than model where it points.
     directory = entry["directory"].strip("/")
     patterns = entry.get("exclude-paths") or []
     reached = set()
@@ -124,7 +134,10 @@ def uv_reach(entry: dict) -> set[str]:
             listed = [parent, path]
         else:
             continue
-        if not any(dependabot_excludes(item, patterns) for item in listed):
+        name = posixpath.relpath(path, directory or ".")
+        if not looks_like_requirements(name):
+            continue
+        if not any(dependabot_excludes(item, patterns) for item in [*listed, name]):
             reached.add(path)
     return reached
 
@@ -140,8 +153,7 @@ def in_pins(path: str) -> set[str]:
     except audit_requirements.AuditError as error:
         raise AssertionError(
             f"{error} (this test reads an `.in` as `name==version` pins only; extras, "
-            "ranges and -r/-c includes are not modeled, and Dependabot fetches an "
-            "include even from an excluded path)"
+            "ranges and -r/-c includes are not modeled)"
         ) from error
 
 
