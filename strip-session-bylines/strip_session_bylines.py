@@ -19,8 +19,8 @@ The body that is stripped is fetched fresh from the API, not taken from the
 event payload, so a late run cannot write back text older than a later edit.
 If the content is unchanged after stripping, no update is sent.
 
-The strip-session-bylines action runs this module, with github_headers.py
-and session_bylines.py from ../shared.
+The strip-session-bylines action runs this module, with github_api.py,
+github_headers.py, https_only.py and session_bylines.py from ../shared.
 It runs from the action's own pinned copy and checks nothing out. On the three
 pull request events that is no boundary: the calling workflow comes from the
 pull request's merge ref, so a pull request can change what the job runs.
@@ -33,6 +33,14 @@ pull_request):
   - pull_request_review_comment [created, edited]: PR diff-line comments
   - pull_request_review [submitted, edited]:       PR review body
 
+Manual mode: when STRIP_NUMBER names an issue or pull request, the event is
+ignored and the whole item is cleaned instead: its description, every issue
+comment and, for a pull request, every diff-line review comment and every
+review body.  Each list is read page by page, and only items whose body
+changes are written, each fetched again just before, as in event mode.
+This is for bylines written before the workflow existed or missed by it,
+from a workflow_dispatch run, whose payload names no item.
+
 Usage:
     python3 strip_session_bylines.py
 
@@ -43,8 +51,12 @@ Environment variables (the action sets GITHUB_TOKEN; the runner sets the rest):
                           pull_request_target, pull_request_review_comment,
                           pull_request_review.
     GITHUB_EVENT_PATH     Path to the JSON file with the full event payload.
+    STRIP_NUMBER          Optional issue or PR number; selects manual mode, which
+                          needs only GITHUB_TOKEN and GITHUB_REPOSITORY.
 
-Exit code is always 0 so a missing/failed strip never breaks the caller.
+In event mode the exit code is always 0, so a missing/failed strip never breaks
+the caller.  Manual mode is run by a person, who needs to see a failure: it exits
+1 if the number is not a positive integer or any read or write fails.
 """
 
 import json
@@ -53,6 +65,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
 
+from github_api import gh_api, gh_api_page
 from github_headers import github_headers
 from https_only import urlopen_https
 from session_bylines import strip_bylines
@@ -107,73 +120,184 @@ def _fetch_body(token: str, url: str) -> str | None:
         return None
 
 
-def _strip(token: str, url: str, method: str, label: str, payload_body: str | None) -> bool:
-    """Strip bylines from the item at *url*.  Returns True if an update was issued.
+# Each kind of item: its endpoint under repos/{repo}/, the method that edits
+# its body, and its label in the log.  Both modes build their URLs from here.
+_ENDPOINTS = {
+    "issue": ("issues/{number}", "patch", "Issue #{number}"),
+    "pr": ("pulls/{number}", "patch", "PR #{number}"),
+    "comment": ("issues/comments/{id}", "patch", "Comment #{id}"),
+    "review_comment": ("pulls/comments/{id}", "patch", "Review comment #{id}"),
+    "review": ("pulls/{number}/reviews/{id}", "put", "Review #{id}"),
+}
 
-    The payload's body only decides whether to look further: an event whose
-    body carries no byline needs no API call.  The body that is stripped and
-    written back is the one fetched from *url*, because the payload's copy can
-    be older than the stored one: a run for an item's creation that finishes
-    after the run for its edit would otherwise write the older text back.
+UNCHANGED, STRIPPED, FAILED = "unchanged", "stripped", "failed"
+
+
+def _strip_item(
+    token: str, repository: str, kind: str, known_body: str | None, quiet: bool = False, **ids
+) -> str:
+    """Strip bylines from one item of *kind*, named by *ids*.
+
+    Returns UNCHANGED, STRIPPED, or FAILED if a read or write failed.
+
+    *known_body* (from an event payload or a list just read) only decides
+    whether to look further: a body with no byline needs no API call, and with
+    *quiet* is not logged.  The body that is stripped and written back is
+    fetched afresh, because the known copy can be older than the stored one: a
+    run for an item's creation that finishes after the run for its edit, or a
+    manual run that listed a comment before someone edited it, would otherwise
+    write the older text back.
     """
-    payload_body = payload_body or ""
-    if strip_bylines(payload_body) == payload_body:
-        print(f"{label}: no bylines found, skipping.")
-        return False
+    path, method, label = _ENDPOINTS[kind]
+    url = f"https://api.github.com/repos/{repository}/" + path.format(**ids)
+    label = label.format(**ids)
+
+    known_body = known_body or ""
+    if strip_bylines(known_body) == known_body:
+        if not quiet:
+            print(f"{label}: no bylines found, skipping.")
+        return UNCHANGED
 
     current = _fetch_body(token, url)
     if current is None:
-        return False
+        return FAILED
     stripped = strip_bylines(current)
     if stripped == current:
         print(f"{label}: no bylines in the current body, skipping.")
-        return False
+        return UNCHANGED
 
-    ok = _update(method, token, url, stripped)
-    if ok:
-        print(f"{label}: bylines stripped.")
-    return ok
+    if not _update(method, token, url, stripped):
+        return FAILED
+    print(f"{label}: bylines stripped.")
+    return STRIPPED
 
 
 def handle_issue(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from an issue body.  Returns True if a PATCH was issued."""
     issue = payload.get("issue", {})
-    number = issue.get("number")
-    url = f"https://api.github.com/repos/{repository}/issues/{number}"
-    return _strip(token, url, "patch", f"Issue #{number}", issue.get("body"))
+    outcome = _strip_item(token, repository, "issue", issue.get("body"), number=issue.get("number"))
+    return outcome == STRIPPED
 
 
 def handle_issue_comment(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from an issue/PR comment.  Returns True if a PATCH was issued."""
     comment = payload.get("comment", {})
-    comment_id = comment.get("id")
-    url = f"https://api.github.com/repos/{repository}/issues/comments/{comment_id}"
-    return _strip(token, url, "patch", f"Comment #{comment_id}", comment.get("body"))
+    outcome = _strip_item(token, repository, "comment", comment.get("body"), id=comment.get("id"))
+    return outcome == STRIPPED
 
 
 def handle_pull_request(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from a PR body.  Returns True if a PATCH was issued."""
     pr = payload.get("pull_request", {})
-    number = pr.get("number")
-    url = f"https://api.github.com/repos/{repository}/pulls/{number}"
-    return _strip(token, url, "patch", f"PR #{number}", pr.get("body"))
+    outcome = _strip_item(token, repository, "pr", pr.get("body"), number=pr.get("number"))
+    return outcome == STRIPPED
 
 
 def handle_pull_request_review_comment(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from a PR review comment.  Returns True if a PATCH was issued."""
     comment = payload.get("comment", {})
-    comment_id = comment.get("id")
-    url = f"https://api.github.com/repos/{repository}/pulls/comments/{comment_id}"
-    return _strip(token, url, "patch", f"Review comment #{comment_id}", comment.get("body"))
+    outcome = _strip_item(
+        token, repository, "review_comment", comment.get("body"), id=comment.get("id")
+    )
+    return outcome == STRIPPED
 
 
 def handle_pull_request_review(token: str, repository: str, payload: dict) -> bool:
     """Strip bylines from a PR review body.  Returns True if a PUT was issued."""
     review = payload.get("review", {})
-    pr_number = payload.get("pull_request", {}).get("number")
-    review_id = review.get("id")
-    url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/reviews/{review_id}"
-    return _strip(token, url, "put", f"Review #{review_id}", review.get("body"))
+    outcome = _strip_item(
+        token,
+        repository,
+        "review",
+        review.get("body"),
+        number=payload.get("pull_request", {}).get("number"),
+        id=review.get("id"),
+    )
+    return outcome == STRIPPED
+
+
+# ---------------------------------------------------------------------------
+# Manual mode: one whole issue or pull request
+# ---------------------------------------------------------------------------
+
+PER_PAGE = 100
+
+
+def _strip_listed(token: str, repository: str, kind: str, number: int, item: object) -> bool:
+    """Strip one item of a list read in manual mode; return False if that failed.
+
+    A malformed item, or an unexpected error, is reported against the item and
+    does not stop the rest of the run.
+    """
+    if not isinstance(item, dict) or "id" not in item:
+        print(f"Error: a listed {kind} has no id: {item!r:.80}", file=sys.stderr)
+        return False
+    try:
+        outcome = _strip_item(
+            token, repository, kind, item.get("body"), quiet=True, number=number, id=item["id"]
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error: could not strip {kind} {item['id']}: {exc}", file=sys.stderr)
+        return False
+    return outcome != FAILED
+
+
+def _strip_list(token: str, repository: str, number: int, kind: str, path: str) -> bool:
+    """Strip every item of the list at repos/{repository}/{path}, a page at a time.
+
+    A page's items are written before the next page is read.  The Link header
+    says whether another page exists.  Returns False if any read or item failed.
+    """
+    ok = True
+    count = 0
+    page = 1
+    more = True
+    while more:
+        try:
+            batch, more = gh_api_page(
+                f"repos/{repository}/{path}?per_page={PER_PAGE}&page={page}", token
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error: could not read {path} after {count} items: {exc}", file=sys.stderr)
+            return False
+        for item in batch or []:
+            count += 1
+            ok = _strip_listed(token, repository, kind, number, item) and ok
+        page += 1
+    print(f"#{number}: {count} items read from {path}.")
+    return ok
+
+
+def strip_whole_item(token: str, repository: str, number: int) -> bool:
+    """Strip bylines from issue or PR *number* and everything written on it.
+
+    The description is cleaned first, then each list in turn, so a failure
+    part way through keeps what was already done.  Returns True if every read
+    and every needed write succeeded.
+    """
+    try:
+        issue = gh_api(f"repos/{repository}/issues/{number}", token)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error: could not read #{number}: {exc}", file=sys.stderr)
+        return False
+    # The issues endpoint serves pull requests too, marked by this key.
+    is_pr = "pull_request" in issue
+
+    outcome = _strip_item(
+        token, repository, "pr" if is_pr else "issue", issue.get("body"), number=number
+    )
+    ok = outcome != FAILED
+
+    lists = [("comment", f"issues/{number}/comments")]
+    if is_pr:
+        # Reviews with no body pass the byline check untouched.
+        lists += [
+            ("review_comment", f"pulls/{number}/comments"),
+            ("review", f"pulls/{number}/reviews"),
+        ]
+    for kind, path in lists:
+        ok = _strip_list(token, repository, number, kind, path) and ok
+    return ok
 
 
 _HANDLER_NAMES = {
@@ -193,13 +317,24 @@ def main(argv: list[str] | None = None) -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
+    number = os.environ.get("STRIP_NUMBER", "").strip()
 
+    # A manual run fails on a missing setting; an event run skips.
+    outcome = "failing" if number else "skipping"
     if not token:
-        print("GITHUB_TOKEN not set--skipping.", file=sys.stderr)
-        return 0
+        print(f"GITHUB_TOKEN not set--{outcome}.", file=sys.stderr)
+        return 1 if number else 0
     if not repository:
-        print("GITHUB_REPOSITORY not set--skipping.", file=sys.stderr)
-        return 0
+        print(f"GITHUB_REPOSITORY not set--{outcome}.", file=sys.stderr)
+        return 1 if number else 0
+
+    if number:
+        # isdecimal() alone would accept "0" and non-ASCII digits.
+        if not (number.isascii() and number.isdecimal() and int(number) > 0):
+            print(f"Error: STRIP_NUMBER {number!r} is not an issue or PR number.", file=sys.stderr)
+            return 1
+        return 0 if strip_whole_item(token, repository, int(number)) else 1
+
     if not event_name:
         print("GITHUB_EVENT_NAME not set--skipping.", file=sys.stderr)
         return 0

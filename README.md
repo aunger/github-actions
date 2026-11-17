@@ -17,7 +17,7 @@ uses: aunger/vcs-automation/<action>@<40-character-sha>
 | `install-pinned-requirements` | Installs a hash-pinned pip lock with `--require-hashes` and `--force-reinstall`, into a new virtual environment or the Python on `PATH`. |
 | `dependency-audit` | Runs `pip-audit` over every requirements lock, with an ignore list whose stale entries fail the run. |
 | `privileged-checkout-guard` | Fails when a pull-request-triggered job with write permissions checks out pull request code. |
-| `strip-session-bylines` | Removes Claude session-URL bylines from issues, pull requests, comments and reviews as they are written. |
+| `strip-session-bylines` | Removes Claude session-URL bylines from issues, pull requests, comments and reviews as they are written, or from a whole issue or pull request on request. |
 | `branch-cleanup-report` | Sorts branches into Delete, Review and Keep in a job summary, then deletes the ones a reviewer names when approving. |
 | `archive-stale-test-failures` | Swaps the `test-failure` label for `test-failure-archive` on issues with no recent activity. |
 
@@ -45,8 +45,10 @@ run-python-tests/run_tests.sh
 ```
 
 `.github/workflows/test.yml` does the same through the `run-python-tests` action, and runs `dependency-audit` and `privileged-checkout-guard` over this repository.
+The tests need Python 3.11 or later and `bash`.
+
 `.github/workflows/strip-session-bylines.yml` runs `strip-session-bylines` on this repository's own issues, pull requests, comments and reviews, with `issues` and `pull-requests` write access.
-It needs Python 3.11 or later and `bash`.
+Run by hand (`workflow_dispatch`) with a number, it cleans that whole issue or pull request.
 
 ## Copies in other repositories
 

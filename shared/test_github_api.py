@@ -11,9 +11,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 import github_api
 
 
-def respond(payload: bytes) -> MagicMock:
+def respond(payload: bytes, link: str | None = None) -> MagicMock:
     response = MagicMock()
     response.__enter__.return_value.read.return_value = payload
+    response.__enter__.return_value.headers = {"Link": link} if link is not None else {}
     return response
 
 
@@ -47,6 +48,32 @@ class GhApiTest(unittest.TestCase):
     def test_an_empty_response_returns_none(self, mock_urlopen):
         mock_urlopen.return_value = respond(b"")
         self.assertIsNone(github_api.gh_api("repos/o/r/x", "tok", method="DELETE"))
+
+
+class GhApiPageTest(unittest.TestCase):
+    @patch("urllib.request.urlopen")
+    def test_a_next_link_means_another_page(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
+            b"[1]",
+            '<https://api.github.com/x?page=3>; rel="next", '
+            '<https://api.github.com/x?page=9>; rel="last"',
+        )
+        self.assertEqual(([1], True), github_api.gh_api_page("x?page=2", "tok"))
+        self.assertEqual("GET", mock_urlopen.call_args.args[0].get_method())
+
+    @patch("urllib.request.urlopen")
+    def test_no_next_link_means_the_last_page(self, mock_urlopen):
+        mock_urlopen.return_value = respond(
+            b"[1]",
+            '<https://api.github.com/x?page=1>; rel="first", '
+            '<https://api.github.com/x?page=8>; rel="prev"',
+        )
+        self.assertEqual(([1], False), github_api.gh_api_page("x?page=9", "tok"))
+
+    @patch("urllib.request.urlopen")
+    def test_no_link_header_means_a_single_page(self, mock_urlopen):
+        mock_urlopen.return_value = respond(b"[]")
+        self.assertEqual(([], False), github_api.gh_api_page("x", "tok"))
 
 
 if __name__ == "__main__":
