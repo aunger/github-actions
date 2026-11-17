@@ -38,12 +38,10 @@ updates:
   # tool bump that needs work cannot hold back a fix to a lock-only package.
   # python-transitive is `*` minus the pins, so a package a future bump pulls in
   # joins it without an edit here.
-  # typing-extensions is pinned in requirements-audit.in only as a workaround for
-  # a package that is really transitive, so it stays in python-transitive.
   # Names are PEP 503-normalized (pyyaml, not PyYAML), the form the uv parser
-  # gives; test_action_files.py checks each entry's lists match its .in pins
-  # (less its WORKAROUND_PINS) and that every requirements .in and lock is
-  # reached by exactly one entry.
+  # gives. test_action_files.py checks these lists against the .in pins, less
+  # its WORKAROUND_PINS (typing-extensions, which requirements-audit.in explains),
+  # and that each requirements file is reached by exactly one entry.
   # Two groups want at most two pull requests per entry, inside the default limit
   # of 5, so there is no `open-pull-requests-limit`.
   - package-ecosystem: "uv"

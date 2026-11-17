@@ -75,7 +75,7 @@ def requirement_files() -> tuple[str, ...]:
         listed = []
         for top, dirs, names in os.walk(ROOT):
             dirs[:] = [d for d in dirs if d != ".git"]
-            listed += [(Path(top) / name).relative_to(ROOT).as_posix() for name in names]
+            listed += [audit_requirements.relative_to_root(Path(top) / name, ROOT) for name in names]
     else:
         if not any(listed):
             raise AssertionError(f"git tracks no files under {ROOT}; run the tests from a checkout")
