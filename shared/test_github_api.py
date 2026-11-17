@@ -49,6 +49,23 @@ class GhApiTest(unittest.TestCase):
         mock_urlopen.return_value = respond(b"")
         self.assertIsNone(github_api.gh_api("repos/o/r/x", "tok", method="DELETE"))
 
+    @patch("urllib.request.urlopen")
+    def test_a_write_need_not_read_its_response(self, mock_urlopen):
+        response = respond(b"{trunc")
+        mock_urlopen.return_value = response
+        self.assertIsNone(
+            github_api.gh_api(
+                "repos/o/r/issues/1", "tok", method="PATCH", body={}, read_response=False
+            )
+        )
+        response.__enter__.return_value.read.assert_not_called()
+
+    @patch("urllib.request.urlopen")
+    def test_a_get_must_read_its_response(self, mock_urlopen):
+        with self.assertRaises(ValueError):
+            github_api.gh_api("repos/o/r", "tok", read_response=False)
+        mock_urlopen.assert_not_called()
+
 
 class GhApiPageTest(unittest.TestCase):
     @patch("urllib.request.urlopen")

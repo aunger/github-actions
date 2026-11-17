@@ -85,6 +85,7 @@ def archive_issue(issue: dict, repo: str, token: str) -> None:
         token=token,
         method="PATCH",
         body={"labels": current_labels},
+        read_response=False,
     )
     print(f"Archived issue #{n}: {issue['title']}")
 

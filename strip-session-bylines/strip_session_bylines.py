@@ -16,14 +16,24 @@ both forms.
 An optional \n--- separator preceding the Markdown-link footer is consumed
 along with it so no orphaned "---" is left behind.
 The body that is stripped is fetched fresh from the API, not taken from the
-event payload, so a late run cannot write back text older than a later edit.
+event payload; _strip_item says why, and what that does not cover.
 If the content is unchanged after stripping, no update is sent.
 
-The strip-session-bylines action runs this module, with github_api.py,
-github_headers.py, https_only.py and session_bylines.py from ../shared.
-It runs from the action's own pinned copy and checks nothing out. On the three
-pull request events that is no boundary: the calling workflow comes from the
-pull request's merge ref, so a pull request can change what the job runs.
+The strip-session-bylines action runs this module, with github_api.py and
+session_bylines.py (and the modules they import) from ../shared.
+A caller that names the action by `uses: aunger/vcs-automation/...@<sha>`
+runs that pinned copy and checks nothing out. On the pull_request,
+pull_request_review and pull_request_review_comment events that is no
+boundary: the calling workflow comes from the pull request's merge ref, so a
+pull request can change what the job runs.
+This repository's own workflow checks out the default branch and runs the
+local copy. Its issue, issue-comment and PR-description runs (the last through
+pull_request_target) read their workflow file from the default branch, so the
+checkout is a boundary for them. Its review and review-comment runs
+still read the workflow from the merge ref, so a pull request from a branch in
+this repository can change what they run. A manual run uses the workflow on
+whichever branch it is started from, which takes write access to the
+repository.
 The action handles five event types (pull_request_target is handled as
 pull_request):
 
@@ -66,8 +76,6 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
 
 from github_api import gh_api, gh_api_page
-from github_headers import github_headers
-from https_only import urlopen_https
 from session_bylines import strip_bylines
 
 # The byline pattern and strip_bylines() live in session_bylines.py, whose
@@ -76,58 +84,43 @@ from session_bylines import strip_bylines
 # this module.
 
 
-def _update(method: str, token: str, url: str, body: str) -> bool:
-    """Update *url* with {"body": body} using the specified HTTP method.
-
-    Args:
-        method: HTTP method name ("patch" or "put").
-        token: GitHub API token.
-        url: API endpoint URL.
-        body: The new body text.
-
-    Returns:
-        True if the request succeeded, False otherwise.
-    """
-    headers = {**github_headers(token), "Content-Type": "application/json"}
-    data = json.dumps({"body": body}).encode()
+def _update(method: str, token: str, path: str, body: str) -> bool:
+    """Send {"body": body} to *path* with *method* ("PATCH" or "PUT"); True on success."""
     try:
-        # urlopen raises HTTPError for any status outside 2xx.
-        with urlopen_https(url, data, headers=headers, method=method.upper(), timeout=30):
-            pass
+        # The echoed object is not needed, so it is not read: an applied write
+        # with a cut-off or garbled response still counts as applied.
+        gh_api(path, token, method=method, body={"body": body}, read_response=False)
         return True
     except Exception as exc:  # noqa: BLE001
-        print(f"Warning: {method.upper()} {url} failed: {exc}", file=sys.stderr)
+        print(f"Warning: {method} {path} failed: {exc}", file=sys.stderr)
         return False
 
 
-def _patch(token: str, url: str, body: str) -> bool:
-    """PATCH *url* with {"body": body}; return True on success."""
-    return _update("patch", token, url, body)
+def _fetch_body(token: str, path: str) -> str | None:
+    """GET *path* and return its "body" field ("" if empty), or None on failure.
 
-
-def _put(token: str, url: str, body: str) -> bool:
-    """PUT *url* with {"body": body}; return True on success."""
-    return _update("put", token, url, body)
-
-
-def _fetch_body(token: str, url: str) -> str | None:
-    """GET *url* and return its "body" field ("" if empty), or None on failure."""
+    A response that is not a JSON object (an empty one, say) is a failure, not
+    an empty body: treating it as clean would leave a byline in place unreported.
+    """
     try:
-        with urlopen_https(url, headers=github_headers(token), method="GET", timeout=30) as response:
-            return json.loads(response.read()).get("body") or ""
+        item = gh_api(path, token)
     except Exception as exc:  # noqa: BLE001
-        print(f"Warning: GET {url} failed: {exc}", file=sys.stderr)
+        print(f"Warning: GET {path} failed: {exc}", file=sys.stderr)
         return None
+    if not isinstance(item, dict):
+        print(f"Warning: GET {path} returned no object: {item!r:.80}", file=sys.stderr)
+        return None
+    return item.get("body") or ""
 
 
 # Each kind of item: its endpoint under repos/{repo}/, the method that edits
-# its body, and its label in the log.  Both modes build their URLs from here.
+# its body, and its label in the log.  Both modes build their API paths from here.
 _ENDPOINTS = {
-    "issue": ("issues/{number}", "patch", "Issue #{number}"),
-    "pr": ("pulls/{number}", "patch", "PR #{number}"),
-    "comment": ("issues/comments/{id}", "patch", "Comment #{id}"),
-    "review_comment": ("pulls/comments/{id}", "patch", "Review comment #{id}"),
-    "review": ("pulls/{number}/reviews/{id}", "put", "Review #{id}"),
+    "issue": ("issues/{number}", "PATCH", "Issue #{number}"),
+    "pr": ("pulls/{number}", "PATCH", "PR #{number}"),
+    "comment": ("issues/comments/{id}", "PATCH", "Comment #{id}"),
+    "review_comment": ("pulls/comments/{id}", "PATCH", "Review comment #{id}"),
+    "review": ("pulls/{number}/reviews/{id}", "PUT", "Review #{id}"),
 }
 
 UNCHANGED, STRIPPED, FAILED = "unchanged", "stripped", "failed"
@@ -146,10 +139,12 @@ def _strip_item(
     fetched afresh, because the known copy can be older than the stored one: a
     run for an item's creation that finishes after the run for its edit, or a
     manual run that listed a comment before someone edited it, would otherwise
-    write the older text back.
+    write the older text back.  That narrows the window rather than closing
+    it: the REST API has no conditional update, so an edit saved between the
+    fetch and the write is still overwritten.
     """
-    path, method, label = _ENDPOINTS[kind]
-    url = f"https://api.github.com/repos/{repository}/" + path.format(**ids)
+    template, method, label = _ENDPOINTS[kind]
+    path = f"repos/{repository}/" + template.format(**ids)
     label = label.format(**ids)
 
     known_body = known_body or ""
@@ -158,7 +153,7 @@ def _strip_item(
             print(f"{label}: no bylines found, skipping.")
         return UNCHANGED
 
-    current = _fetch_body(token, url)
+    current = _fetch_body(token, path)
     if current is None:
         return FAILED
     stripped = strip_bylines(current)
@@ -166,7 +161,7 @@ def _strip_item(
         print(f"{label}: no bylines in the current body, skipping.")
         return UNCHANGED
 
-    if not _update(method, token, url, stripped):
+    if not _update(method, token, path, stripped):
         return FAILED
     print(f"{label}: bylines stripped.")
     return STRIPPED
@@ -247,6 +242,8 @@ def _strip_list(token: str, repository: str, number: int, kind: str, path: str) 
 
     A page's items are written before the next page is read.  The Link header
     says whether another page exists.  Returns False if any read or item failed.
+    A page that is not a JSON list (an empty response, say) is a failed read,
+    as in _fetch_body.
     """
     ok = True
     count = 0
@@ -260,7 +257,13 @@ def _strip_list(token: str, repository: str, number: int, kind: str, path: str) 
         except Exception as exc:  # noqa: BLE001
             print(f"Error: could not read {path} after {count} items: {exc}", file=sys.stderr)
             return False
-        for item in batch or []:
+        if not isinstance(batch, list):
+            print(
+                f"Error: {path} returned no list after {count} items: {batch!r:.80}",
+                file=sys.stderr,
+            )
+            return False
+        for item in batch:
             count += 1
             ok = _strip_listed(token, repository, kind, number, item) and ok
         page += 1
@@ -279,6 +282,9 @@ def strip_whole_item(token: str, repository: str, number: int) -> bool:
         issue = gh_api(f"repos/{repository}/issues/{number}", token)
     except Exception as exc:  # noqa: BLE001
         print(f"Error: could not read #{number}: {exc}", file=sys.stderr)
+        return False
+    if not isinstance(issue, dict):
+        print(f"Error: could not read #{number}: no object: {issue!r:.80}", file=sys.stderr)
         return False
     # The issues endpoint serves pull requests too, marked by this key.
     is_pr = "pull_request" in issue

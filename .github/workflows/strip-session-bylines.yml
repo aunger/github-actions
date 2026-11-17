@@ -6,13 +6,16 @@ name: Strip session bylines
 # The checkout takes the default branch by name, so the script that runs with
 # write permissions is the current reviewed one, never one a pull request
 # branch supplies, and never a stale base commit. privileged-checkout-guard
-# accepts this ref.
+# accepts this ref. That holds only while this file itself comes from the
+# default branch, which review and review-comment runs do not guarantee: see
+# the docstring of strip-session-bylines/strip_session_bylines.py.
 #
 # PR descriptions use pull_request_target, which reads this workflow from the
-# base branch, gets a write token on fork pull requests, and runs when a pull
-# request has a merge conflict. The review events have no _target variant: on
-# a fork pull request their token is read-only, so bylines in reviews and
-# review comments there are left in place (the action logs a warning).
+# default branch (whatever the PR's base), gets a write token on fork pull
+# requests, and runs when a pull request has a merge conflict. The review
+# events have no _target variant: on a fork pull request their token is
+# read-only, so bylines in reviews and review comments there are left in place
+# (the action logs a warning).
 #
 # A workflow_dispatch run cleans one whole issue or pull request, named by
 # number: its description and every comment and review on it. That catches
@@ -42,10 +45,12 @@ permissions:
   pull-requests: write
 
 # One run at a time per event type and item, so the creation and edit runs of
-# one comment do not race. A manual run has a group of its own, so it can
-# overlap event runs on the same issue or pull request; that is safe because
-# the script, in both modes, re-fetches each body just before writing it, so
-# whichever run goes last writes the current text.
+# one comment do not overlap. GitHub keeps at most one pending run per group: a
+# newer event cancels the pending one (it shows as a cancelled run). A manual
+# run has a group of its own, so it can overlap event runs on the same issue or
+# pull request. Both are harmless because the script, in both modes,
+# re-fetches each body just before writing it (see _strip_item in the script
+# for what that does not cover).
 concurrency:
   group: >-
     strip-session-bylines-${{ github.event_name }}-${{ inputs.number
@@ -55,14 +60,17 @@ concurrency:
 
 jobs:
   strip:
-    # Skip the runner entirely for the action's own edits and for text with no
-    # byline. A review with no body falls through to the PR body, which at
-    # worst starts a run that finds nothing. A manual run always goes ahead.
+    # Skip the runner entirely for text with no byline. A review is judged by
+    # its own body only, so a body-less approval does not fall through to the
+    # PR description. A manual run always goes ahead. The action's own edits
+    # need no check here: writes made with GITHUB_TOKEN start no workflow runs.
     if: >-
-      github.actor != 'github-actions[bot]' && (
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.comment.body || github.event.review.body
-      || github.event.pull_request.body || github.event.issue.body, 'claude.ai/code'))
+      github.event_name == 'workflow_dispatch'
+      || github.event_name == 'pull_request_review'
+      && contains(github.event.review.body, 'claude.ai/code')
+      || github.event_name != 'pull_request_review'
+      && contains(github.event.comment.body || github.event.pull_request.body
+      || github.event.issue.body, 'claude.ai/code')
     runs-on: ubuntu-latest
     steps:
       # Pinned by SHA because this job holds write scopes. Dependabot's
