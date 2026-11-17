@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Unit tests for strip_session_bylines.py."""
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -544,8 +546,22 @@ class TestStripWholeItem(unittest.TestCase):
             sent_,
         )
         self.assertIn("repos/o/r/issues/5/comments?per_page=100&page=2", self.api.paths)
-        # A short page is the last: no third page is asked for.
-        self.assertNotIn("repos/o/r/issues/5/comments?per_page=100&page=3", self.api.paths)
+        # The list ends at the empty third page.
+        self.assertIn("repos/o/r/issues/5/comments?per_page=100&page=3", self.api.paths)
+        self.assertNotIn("repos/o/r/issues/5/comments?per_page=100&page=4", self.api.paths)
+
+    def test_a_short_page_is_not_taken_as_the_last(self):
+        ok, sent_ = self.run_with(
+            {
+                "repos/o/r/issues/5": {"number": 5, "body": ""},
+                "repos/o/r/issues/5/comments": [
+                    [{"id": 1, "body": "clean"}],
+                    [{"id": 2, "body": "dirty" + BYLINE}],
+                ],
+            }
+        )
+        self.assertTrue(ok)
+        self.assertEqual([("PATCH", f"{API}/issues/comments/2", "dirty")], sent_)
 
     def test_a_full_last_page_ends_at_the_empty_one(self):
         ok, sent_ = self.run_with(
@@ -592,6 +608,29 @@ class TestStripWholeItem(unittest.TestCase):
             [("PATCH", f"{API}/pulls/5", "PR"), ("PATCH", f"{API}/pulls/comments/2", "rc")],
             sent_,
         )
+
+    def test_a_failed_later_page_keeps_the_earlier_pages_and_says_how_far_it_got(self):
+        error = urllib.error.HTTPError("u", 502, "Bad Gateway", {}, None)
+        first = [{"id": 1, "body": "dirty" + BYLINE}, {"id": 2, "body": "clean"}]
+        api = FakeApi({"repos/o/r/issues/5": {"number": 5, "body": ""}})
+
+        def pages(path, token):
+            if path.endswith("page=1"):
+                return first
+            if path.endswith("page=2"):
+                raise error
+            return api(path, token)
+
+        stderr, stdout = io.StringIO(), io.StringIO()
+        with patch("strip_session_bylines.gh_api", side_effect=pages), patch(
+            "strip_session_bylines._fetch_body", return_value="dirty" + BYLINE
+        ), patch("strip_session_bylines.urlopen_https") as mock_open, contextlib.redirect_stderr(
+            stderr
+        ), contextlib.redirect_stdout(stdout):
+            self.assertFalse(ssb.strip_whole_item("tok", "o/r", 5))
+        self.assertEqual([("PATCH", f"{API}/issues/comments/1", "dirty")], writes(mock_open))
+        self.assertIn("could not read issues/5/comments after 2 items", stderr.getvalue())
+        self.assertNotIn("items read from", stdout.getvalue())
 
     def test_a_failed_write_returns_false_and_the_rest_are_still_tried(self):
         ok, sent_ = self.run_with(
@@ -798,9 +837,13 @@ class TestMain(unittest.TestCase):
 
     @patch("strip_session_bylines.strip_whole_item")
     def test_manual_mode_fails_without_a_token(self, mock_strip):
-        with patch.dict(os.environ, self._env(GITHUB_TOKEN="", STRIP_NUMBER="12"), clear=True):
+        stderr = io.StringIO()
+        with patch.dict(
+            os.environ, self._env(GITHUB_TOKEN="", STRIP_NUMBER="12"), clear=True
+        ), contextlib.redirect_stderr(stderr):
             self.assertEqual(ssb.main([]), 1)
         mock_strip.assert_not_called()
+        self.assertIn("GITHUB_TOKEN not set--failing.", stderr.getvalue())
 
     @patch("strip_session_bylines.handle_issue")
     @patch("strip_session_bylines.strip_whole_item")

@@ -37,8 +37,9 @@ Manual mode: when STRIP_NUMBER names an issue or pull request, the event is
 ignored and the whole item is cleaned instead: its description, every issue
 comment and, for a pull request, every diff-line review comment and every
 review body.  Each list is read page by page, and only items whose body
-changes are written, each fetched again just before, as in event mode.  This is for bylines written before the workflow existed
-or missed by it, from a workflow_dispatch run, whose payload names no item.
+changes are written, each fetched again just before, as in event mode.
+This is for bylines written before the workflow existed or missed by it,
+from a workflow_dispatch run, whose payload names no item.
 
 Usage:
     python3 strip_session_bylines.py
@@ -223,18 +224,16 @@ PER_PAGE = 100
 
 
 def _pages(path: str, token: str):
-    """Yield every item of the list at *path* (which has no query string yet).
+    """Yield each page of the list at *path* (which has no query string yet).
 
-    Pages are read as they are needed, so an item is written before the next
-    page is read.  A page shorter than PER_PAGE is the last one.
+    Pages are read as they are needed, so a page's items are written before
+    the next page is read.  The list ends at the first empty page, not at a
+    short one, since a short page need not be the last.
     Raises what gh_api raises.
     """
     page = 1
-    while True:
-        batch = gh_api(f"{path}?per_page={PER_PAGE}&page={page}", token) or []
-        yield from batch
-        if len(batch) < PER_PAGE:
-            return
+    while batch := gh_api(f"{path}?per_page={PER_PAGE}&page={page}", token):
+        yield batch
         page += 1
 
 
@@ -267,18 +266,26 @@ def strip_whole_item(token: str, repository: str, number: int) -> bool:
         ]
     for kind, path in lists:
         count = 0
-        try:
-            for item in _pages(f"repos/{repository}/{path}", token):
+        pages = _pages(f"repos/{repository}/{path}", token)
+        while True:
+            # Only the read is guarded, so an error is reported as a read
+            # error only when it is one.
+            try:
+                batch = next(pages)
+            except StopIteration:
+                print(f"#{number}: {count} items read from {path}.")
+                break
+            except Exception as exc:  # noqa: BLE001
+                print(f"Error: could not read {path} after {count} items: {exc}", file=sys.stderr)
+                ok = False
+                break
+            for item in batch:
                 count += 1
                 outcome = _strip_item(
                     token, repository, kind, item.get("body"),
-                    quiet=True, number=number, id=item["id"],
+                    quiet=True, number=number, id=item.get("id"),
                 )
                 ok = outcome != FAILED and ok
-        except Exception as exc:  # noqa: BLE001
-            print(f"Error: could not read {path}: {exc}", file=sys.stderr)
-            ok = False
-        print(f"#{number}: {count} items read from {path}.")
     return ok
 
 
@@ -301,11 +308,13 @@ def main(argv: list[str] | None = None) -> int:
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
     number = os.environ.get("STRIP_NUMBER", "").strip()
 
+    # A manual run fails on a missing setting; an event run skips.
+    outcome = "failing" if number else "skipping"
     if not token:
-        print("GITHUB_TOKEN not set--skipping.", file=sys.stderr)
+        print(f"GITHUB_TOKEN not set--{outcome}.", file=sys.stderr)
         return 1 if number else 0
     if not repository:
-        print("GITHUB_REPOSITORY not set--skipping.", file=sys.stderr)
+        print(f"GITHUB_REPOSITORY not set--{outcome}.", file=sys.stderr)
         return 1 if number else 0
 
     if number:
