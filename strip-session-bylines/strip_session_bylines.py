@@ -114,7 +114,7 @@ def _fetch_body(token: str, path: str) -> str | None:
 
 
 # Each kind of item: its endpoint under repos/{repo}/, the method that edits
-# its body, and its label in the log.  Both modes build their URLs from here.
+# its body, and its label in the log.  Both modes build their API paths from here.
 _ENDPOINTS = {
     "issue": ("issues/{number}", "PATCH", "Issue #{number}"),
     "pr": ("pulls/{number}", "PATCH", "PR #{number}"),
@@ -242,6 +242,8 @@ def _strip_list(token: str, repository: str, number: int, kind: str, path: str) 
 
     A page's items are written before the next page is read.  The Link header
     says whether another page exists.  Returns False if any read or item failed.
+    A page that is not a JSON list (an empty response, say) is a failed read,
+    as in _fetch_body.
     """
     ok = True
     count = 0
@@ -255,7 +257,13 @@ def _strip_list(token: str, repository: str, number: int, kind: str, path: str) 
         except Exception as exc:  # noqa: BLE001
             print(f"Error: could not read {path} after {count} items: {exc}", file=sys.stderr)
             return False
-        for item in batch or []:
+        if not isinstance(batch, list):
+            print(
+                f"Error: {path} returned no list after {count} items: {batch!r:.80}",
+                file=sys.stderr,
+            )
+            return False
+        for item in batch:
             count += 1
             ok = _strip_listed(token, repository, kind, number, item) and ok
         page += 1
@@ -274,6 +282,9 @@ def strip_whole_item(token: str, repository: str, number: int) -> bool:
         issue = gh_api(f"repos/{repository}/issues/{number}", token)
     except Exception as exc:  # noqa: BLE001
         print(f"Error: could not read #{number}: {exc}", file=sys.stderr)
+        return False
+    if not isinstance(issue, dict):
+        print(f"Error: could not read #{number}: no object: {issue!r:.80}", file=sys.stderr)
         return False
     # The issues endpoint serves pull requests too, marked by this key.
     is_pr = "pull_request" in issue

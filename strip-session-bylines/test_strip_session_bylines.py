@@ -114,7 +114,7 @@ def empty_response():
 
 
 def sent(mock_open):
-    """Return the method, URL and body of the one request *mock_open* received."""
+    """Return the method, full URL and body of the one request *mock_open* received."""
     mock_open.assert_called_once()
     args, kwargs = mock_open.call_args
     return kwargs["method"], args[0], json.loads(args[1])["body"]
@@ -411,8 +411,9 @@ class FakeApi:
     A call with a method other than GET is a write: it is recorded in
     *writes* as (method, path, body) and answered by the next of
     *write_errors*, raised if it is an exception (None means success).
-    When *write_errors* is given, a write beyond its length fails the test, as
-    an exhausted mock side_effect would, so an unexpected extra write is caught.
+    When *write_errors* is given, a write beyond its length is also listed in
+    *unexpected*, which the test must check is empty: raising here would not
+    fail the test, since _update catches what a write raises.
     """
 
     def __init__(self, routes, write_errors=()):
@@ -421,12 +422,13 @@ class FakeApi:
         self.writes = []
         self.write_errors = list(write_errors)
         self.limit_writes = bool(write_errors)
+        self.unexpected = []
 
     def __call__(self, path, token, method="GET", body=None, read_response=True):
         if method != "GET":
             self.writes.append((method, path, body["body"]))
             if self.limit_writes and not self.write_errors:
-                raise AssertionError(f"unexpected extra write: {method} {path}")
+                self.unexpected.append((method, path))
             error = self.write_errors.pop(0) if self.write_errors else None
             if isinstance(error, Exception):
                 raise error
@@ -462,8 +464,9 @@ class TestStripWholeItem(unittest.TestCase):
     def run_with(self, routes, current=None, write_errors=()):
         """Run strip_whole_item(5) against *routes*.
 
-        *current* maps a URL to the body a fresh fetch returns; a URL not in it
-        returns the body as listed, found by matching the URL's last part.
+        *current* maps an API path to the body a fresh fetch returns; a path not
+        in it returns the body as listed, found by matching the path's last part.
+        An unexpected extra write (see FakeApi) fails the test.
         """
         self.api = FakeApi(routes, write_errors)
         listed = {}
@@ -475,12 +478,13 @@ class TestStripWholeItem(unittest.TestCase):
         current = current or {}
         self.fetched = []
 
-        def fetch(token, url):
-            self.fetched.append(url)
-            return current[url] if url in current else listed[url.rsplit("/", 1)[1]]
+        def fetch(token, path):
+            self.fetched.append(path)
+            return current[path] if path in current else listed[path.rsplit("/", 1)[1]]
 
         with fake_api(self.api), patch("strip_session_bylines._fetch_body", side_effect=fetch):
             ok = ssb.strip_whole_item("tok", "o/r", 5)
+        self.assertEqual([], self.api.unexpected)
         return ok, self.api.writes
 
     def test_issue_body_and_comments(self):
@@ -723,6 +727,24 @@ class TestStripWholeItem(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertEqual(2, len(sent_))
+
+    def test_an_item_that_is_no_object_is_a_failed_read(self):
+        for answer in (None, []):
+            stderr = io.StringIO()
+            with patch("strip_session_bylines.gh_api", return_value=answer), (
+                contextlib.redirect_stderr(stderr)
+            ):
+                self.assertFalse(ssb.strip_whole_item("tok", "o/r", 5))
+            self.assertIn("could not read #5", stderr.getvalue())
+
+    def test_a_page_that_is_no_list_is_a_failed_read(self):
+        api = FakeApi({"repos/o/r/issues/5": {"number": 5, "body": ""}})
+        stderr = io.StringIO()
+        with fake_api(api), patch(
+            "strip_session_bylines.gh_api_page", return_value=(None, False)
+        ), contextlib.redirect_stderr(stderr):
+            self.assertFalse(ssb.strip_whole_item("tok", "o/r", 5))
+        self.assertIn("issues/5/comments returned no list", stderr.getvalue())
 
     def test_a_failed_fetch_returns_false(self):
         api = FakeApi({"repos/o/r/issues/5": {"number": 5, "body": "Issue" + BYLINE}})

@@ -37,8 +37,11 @@ def gh_api(
     With *read_response* false the response body is neither read nor parsed,
     and None is returned once the status is 2xx: for a write whose echoed
     object the caller discards, so a cut-off or garbled echo cannot turn an
-    applied write into an error.
+    applied write into an error. A GET has nothing but its response, so
+    asking for one unread raises ValueError.
     """
+    if method == "GET" and not read_response:
+        raise ValueError("read_response=False is for writes, not for a GET")
     return _call(path, token, method, body, read_response)[0]
 
 

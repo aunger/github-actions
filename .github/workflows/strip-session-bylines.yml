@@ -6,7 +6,9 @@ name: Strip session bylines
 # The checkout takes the default branch by name, so the script that runs with
 # write permissions is the current reviewed one, never one a pull request
 # branch supplies, and never a stale base commit. privileged-checkout-guard
-# accepts this ref.
+# accepts this ref. That holds only while this file itself comes from the
+# default branch, which review and review-comment runs do not guarantee: see
+# the docstring of strip-session-bylines/strip_session_bylines.py.
 #
 # PR descriptions use pull_request_target, which reads this workflow from the
 # default branch (whatever the PR's base), gets a write token on fork pull
