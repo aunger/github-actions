@@ -27,12 +27,13 @@ pull_request_review and pull_request_review_comment events that is no
 boundary: the calling workflow comes from the pull request's merge ref, so a
 pull request can change what the job runs.
 This repository's own workflow checks out the default branch and runs the
-local copy. That is a boundary only for PR descriptions, which it takes from
-pull_request_target, whose workflow file comes from the base branch. Its review
-and review-comment runs still read the workflow from the merge ref, so a pull
-request from a branch in this repository can change what they run. A manual
-run uses the workflow on whichever branch it is started from, which takes
-write access to the repository.
+local copy. Its issue, issue-comment and PR-description runs (the last through
+pull_request_target) read their workflow file from the default or base branch,
+so the checkout is a boundary for them. Its review and review-comment runs
+still read the workflow from the merge ref, so a pull request from a branch in
+this repository can change what they run. A manual run uses the workflow on
+whichever branch it is started from, which takes write access to the
+repository.
 The action handles five event types (pull_request_target is handled as
 pull_request):
 
@@ -86,11 +87,9 @@ from session_bylines import strip_bylines
 def _update(method: str, token: str, path: str, body: str) -> bool:
     """Send {"body": body} to *path* with *method* ("PATCH" or "PUT"); True on success."""
     try:
-        gh_api(path, token, method=method, body={"body": body})
-        return True
-    except json.JSONDecodeError:
-        # The write got a 2xx (gh_api raises before parsing otherwise), so it
-        # was applied; only the echoed object, which is discarded, was unreadable.
+        # The echoed object is not needed, so it is not read: an applied write
+        # with a cut-off or garbled response still counts as applied.
+        gh_api(path, token, method=method, body={"body": body}, read_response=False)
         return True
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: {method} {path} failed: {exc}", file=sys.stderr)
@@ -98,12 +97,20 @@ def _update(method: str, token: str, path: str, body: str) -> bool:
 
 
 def _fetch_body(token: str, path: str) -> str | None:
-    """GET *path* and return its "body" field ("" if empty), or None on failure."""
+    """GET *path* and return its "body" field ("" if empty), or None on failure.
+
+    A response that is not a JSON object (an empty one, say) is a failure, not
+    an empty body: treating it as clean would leave a byline in place unreported.
+    """
     try:
-        return (gh_api(path, token) or {}).get("body") or ""
+        item = gh_api(path, token)
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: GET {path} failed: {exc}", file=sys.stderr)
         return None
+    if not isinstance(item, dict):
+        print(f"Warning: GET {path} returned no object: {item!r:.80}", file=sys.stderr)
+        return None
+    return item.get("body") or ""
 
 
 # Each kind of item: its endpoint under repos/{repo}/, the method that edits

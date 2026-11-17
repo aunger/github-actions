@@ -57,8 +57,11 @@ inputs:
 runs:
   using: composite
   steps:
-    # The action's own edits start no new runs when made with GITHUB_TOKEN, and
-    # find nothing to strip when made with another token, so no actor check.
+    # There is no actor check. The action's own edits start no new runs when
+    # made with GITHUB_TOKEN. With another token they do, and a rerun can strip
+    # again: one pass can leave a byline that only a second pass removes (two
+    # bylines run together on one line), so the extra run is real work, not a
+    # loop, and it ends once a pass finds nothing.
     # The script uses only the standard library, so nothing is installed first.
     - name: Strip session-URL bylines
       shell: bash

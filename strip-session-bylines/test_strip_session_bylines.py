@@ -2,6 +2,7 @@
 """Unit tests for strip_session_bylines.py."""
 
 import contextlib
+import http.client
 import io
 import json
 import os
@@ -129,10 +130,12 @@ class TestUpdate(unittest.TestCase):
         self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
         self.assertEqual(kwargs["method"], "PATCH")
 
-    def test_an_unreadable_success_response_still_counts(self, mock_open):
-        # A 2xx whose echoed object is not JSON: the write was applied.
-        mock_open.return_value.__enter__.return_value.read.return_value = b"{trunc"
+    def test_the_response_is_not_read(self, mock_open):
+        # An applied write whose echo is cut off mid-read still counts.
+        read = mock_open.return_value.__enter__.return_value.read
+        read.side_effect = http.client.IncompleteRead(b"{")
         self.assertTrue(ssb._update("PATCH", "tok", "repos/o/r/issues/1", "text"))
+        read.assert_not_called()
 
     def test_an_http_error_returns_false(self, mock_open):
         mock_open.side_effect = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
@@ -148,6 +151,10 @@ class TestFetchBody(unittest.TestCase):
         self.assertEqual(args[0], "https://api.github.com/x")
         self.assertEqual(kwargs["method"], "GET")
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer tok")
+
+    def test_an_empty_response_is_a_failure(self, mock_open):
+        mock_open.return_value.__enter__.return_value.read.return_value = b""
+        self.assertIsNone(ssb._fetch_body("tok", "x"))
 
     def test_a_null_body_is_empty(self, mock_open):
         mock_open.return_value.__enter__.return_value.read.return_value = b'{"body": null}'
@@ -402,7 +409,9 @@ class FakeApi:
     gh_api_page, reporting a next page while *routes* has more pages.
     A call with a method other than GET is a write: it is recorded in
     *writes* as (method, path, body) and answered by the next of
-    *write_errors*, raised if it is an exception.
+    *write_errors*, raised if it is an exception (None means success).
+    When *write_errors* is given, a write beyond its length fails the test, as
+    an exhausted mock side_effect would, so an unexpected extra write is caught.
     """
 
     def __init__(self, routes, write_errors=()):
@@ -410,10 +419,13 @@ class FakeApi:
         self.paths = []
         self.writes = []
         self.write_errors = list(write_errors)
+        self.limit_writes = bool(write_errors)
 
-    def __call__(self, path, token, method="GET", body=None):
+    def __call__(self, path, token, method="GET", body=None, read_response=True):
         if method != "GET":
             self.writes.append((method, path, body["body"]))
+            if self.limit_writes and not self.write_errors:
+                raise AssertionError(f"unexpected extra write: {method} {path}")
             error = self.write_errors.pop(0) if self.write_errors else None
             if isinstance(error, Exception):
                 raise error
@@ -706,7 +718,7 @@ class TestStripWholeItem(unittest.TestCase):
                 "repos/o/r/issues/5": {"number": 5, "body": "Issue" + BYLINE},
                 "repos/o/r/issues/5/comments": [[{"id": 2, "body": "dirty" + BYLINE}]],
             },
-            write_errors=[Exception("network"), MagicMock()],
+            write_errors=[Exception("network"), None],
         )
         self.assertFalse(ok)
         self.assertEqual(2, len(sent_))
