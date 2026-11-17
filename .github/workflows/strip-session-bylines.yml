@@ -9,7 +9,7 @@ name: Strip session bylines
 # accepts this ref.
 #
 # PR descriptions use pull_request_target, which reads this workflow from the
-# base branch, gets a write token on fork pull requests, and runs when a pull
+# default branch (whatever the PR's base), gets a write token on fork pull requests, and runs when a pull
 # request has a merge conflict. The review events have no _target variant: on
 # a fork pull request their token is read-only, so bylines in reviews and
 # review comments there are left in place (the action logs a warning).

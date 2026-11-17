@@ -246,6 +246,7 @@ class TestArchiveIssue(unittest.TestCase):
             astf.archive_issue(issue, "owner/repo", "tok")
 
         self.assertEqual(mock_api.call_args[1]["method"], "PATCH")
+        self.assertFalse(mock_api.call_args[1]["read_response"])
 
     def test_targets_correct_issue_number_in_path(self):
         issue = _make_issue(99, "Issue", _CUTOFF - timedelta(days=1), ["test-failure"])

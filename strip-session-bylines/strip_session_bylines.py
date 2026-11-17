@@ -28,8 +28,8 @@ boundary: the calling workflow comes from the pull request's merge ref, so a
 pull request can change what the job runs.
 This repository's own workflow checks out the default branch and runs the
 local copy. Its issue, issue-comment and PR-description runs (the last through
-pull_request_target) read their workflow file from the default or base branch,
-so the checkout is a boundary for them. Its review and review-comment runs
+pull_request_target) read their workflow file from the default branch, so the
+checkout is a boundary for them. Its review and review-comment runs
 still read the workflow from the merge ref, so a pull request from a branch in
 this repository can change what they run. A manual run uses the workflow on
 whichever branch it is started from, which takes write access to the
@@ -82,6 +82,20 @@ from session_bylines import strip_bylines
 # docstring names the write-time checker that carries a copy of them.
 # strip_bylines is re-exported here so that callers and tests reach it through
 # this module.
+
+
+def _strip_all(text: str) -> str:
+    """Strip bylines until none are left.
+
+    One pass of strip_bylines can leave a byline that a second pass removes:
+    two bylines run together on one line, the first ending where the second
+    begins, so the second gains its leading newline only once the first is
+    gone. A workflow run's own write with GITHUB_TOKEN starts no new run, so
+    the passes are repeated here; each removes text, so the loop ends.
+    """
+    while (stripped := strip_bylines(text)) != text:
+        text = stripped
+    return text
 
 
 def _update(method: str, token: str, path: str, body: str) -> bool:
@@ -143,12 +157,12 @@ def _strip_item(
     it: the REST API has no conditional update, so an edit saved between the
     fetch and the write is still overwritten.
     """
-    path, method, label = _ENDPOINTS[kind]
-    path = f"repos/{repository}/" + path.format(**ids)
+    template, method, label = _ENDPOINTS[kind]
+    path = f"repos/{repository}/" + template.format(**ids)
     label = label.format(**ids)
 
     known_body = known_body or ""
-    if strip_bylines(known_body) == known_body:
+    if strip_bylines(known_body) == known_body:  # one pass finds any byline
         if not quiet:
             print(f"{label}: no bylines found, skipping.")
         return UNCHANGED
@@ -156,7 +170,7 @@ def _strip_item(
     current = _fetch_body(token, path)
     if current is None:
         return FAILED
-    stripped = strip_bylines(current)
+    stripped = _strip_all(current)
     if stripped == current:
         print(f"{label}: no bylines in the current body, skipping.")
         return UNCHANGED
