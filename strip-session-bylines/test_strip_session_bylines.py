@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 import strip_session_bylines as ssb
+import github_api  # on sys.path once strip_session_bylines is imported
 
 # ---------------------------------------------------------------------------
 # strip_bylines--pure text transformation
@@ -128,13 +129,14 @@ class TestUpdate(unittest.TestCase):
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer tok")
         self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
         self.assertEqual(kwargs["method"], "PATCH")
-        self.assertEqual(kwargs["timeout"], 30)
+        self.assertEqual(kwargs["timeout"], github_api.TIMEOUT_SECONDS)
 
     def test_the_response_is_not_read(self, mock_open):
-        # shared/test_github_api.py covers what read_response=False does.
-        with patch("strip_session_bylines.gh_api") as api:
-            self.assertTrue(ssb._update("PATCH", "tok", "repos/o/r/issues/1", "text"))
-        self.assertFalse(api.call_args.kwargs["read_response"])
+        # A garbled echo would fail to parse, were it read.
+        response = mock_open.return_value.__enter__.return_value
+        response.read.return_value = b"{trunc"
+        self.assertTrue(ssb._update("PATCH", "tok", "repos/o/r/issues/1", "text"))
+        response.read.assert_not_called()
 
     def test_an_http_error_returns_false(self, mock_open):
         mock_open.side_effect = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
