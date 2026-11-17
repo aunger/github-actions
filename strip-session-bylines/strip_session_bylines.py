@@ -84,20 +84,6 @@ from session_bylines import strip_bylines
 # this module.
 
 
-def _strip_all(text: str) -> str:
-    """Strip bylines until none are left.
-
-    One pass of strip_bylines can leave a byline that a second pass removes:
-    two bylines run together on one line, the first ending where the second
-    begins, so the second gains its leading newline only once the first is
-    gone. A workflow run's own write with GITHUB_TOKEN starts no new run, so
-    the passes are repeated here; each removes text, so the loop ends.
-    """
-    while (stripped := strip_bylines(text)) != text:
-        text = stripped
-    return text
-
-
 def _update(method: str, token: str, path: str, body: str) -> bool:
     """Send {"body": body} to *path* with *method* ("PATCH" or "PUT"); True on success."""
     try:
@@ -162,7 +148,7 @@ def _strip_item(
     label = label.format(**ids)
 
     known_body = known_body or ""
-    if strip_bylines(known_body) == known_body:  # one pass finds any byline
+    if strip_bylines(known_body) == known_body:
         if not quiet:
             print(f"{label}: no bylines found, skipping.")
         return UNCHANGED
@@ -170,7 +156,7 @@ def _strip_item(
     current = _fetch_body(token, path)
     if current is None:
         return FAILED
-    stripped = _strip_all(current)
+    stripped = strip_bylines(current)
     if stripped == current:
         print(f"{label}: no bylines in the current body, skipping.")
         return UNCHANGED

@@ -58,8 +58,8 @@ runs:
   using: composite
   steps:
     # There is no actor check. The action's own edits start no new runs when
-    # made with GITHUB_TOKEN; with another token they do, and those runs find
-    # nothing to strip, since the script strips until no byline is left.
+    # made with GITHUB_TOKEN. With another token they do, and each such run
+    # strips whatever bylines the current body still has.
     # The script uses only the standard library, so nothing is installed first.
     - name: Strip session-URL bylines
       shell: bash
