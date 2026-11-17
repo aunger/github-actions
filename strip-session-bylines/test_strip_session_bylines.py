@@ -396,22 +396,42 @@ API = "https://api.github.com/repos/o/r"
 
 
 class FakeApi:
-    """Answers gh_api paths from *routes*: a dict, or a list of pages for a list endpoint."""
+    """Answers API paths from *routes*: a dict, a list of pages, or an exception to raise.
+
+    Called, it stands in for gh_api; its page method stands in for
+    gh_api_page, reporting a next page while *routes* has more pages.
+    """
 
     def __init__(self, routes):
         self.routes = routes
         self.paths = []
 
     def __call__(self, path, token):
+        return self._answer(path)[0]
+
+    def page(self, path, token):
+        return self._answer(path)
+
+    def _answer(self, path):
         self.paths.append(path)
         base, _, query = path.partition("?")
         answer = self.routes.get(base, [])
         if isinstance(answer, Exception):
             raise answer
         if isinstance(answer, dict):
-            return answer
+            return answer, False
         page = int(dict(q.split("=") for q in query.split("&"))["page"]) if query else 1
-        return answer[page - 1] if page <= len(answer) else []
+        batch = answer[page - 1] if page <= len(answer) else []
+        return batch, page < len(answer)
+
+
+@contextlib.contextmanager
+def fake_api(api):
+    """Patch gh_api and gh_api_page with *api*, a FakeApi."""
+    with patch("strip_session_bylines.gh_api", api), patch(
+        "strip_session_bylines.gh_api_page", api.page
+    ):
+        yield
 
 
 def writes(mock_open):
@@ -434,7 +454,8 @@ class TestStripWholeItem(unittest.TestCase):
         for answer in routes.values():
             items = [answer] if isinstance(answer, dict) else [i for page in answer for i in page]
             for item in items:
-                listed[str(item.get("id", item.get("number")))] = item.get("body")
+                if isinstance(item, dict):
+                    listed[str(item.get("id", item.get("number")))] = item.get("body")
         current = current or {}
         self.fetched = []
 
@@ -442,7 +463,7 @@ class TestStripWholeItem(unittest.TestCase):
             self.fetched.append(url)
             return current[url] if url in current else listed[url.rsplit("/", 1)[1]]
 
-        with patch("strip_session_bylines.gh_api", self.api), patch(
+        with fake_api(self.api), patch(
             "strip_session_bylines._fetch_body", side_effect=fetch
         ), patch("strip_session_bylines.urlopen_https") as mock_open:
             if write_errors:
@@ -546,9 +567,8 @@ class TestStripWholeItem(unittest.TestCase):
             sent_,
         )
         self.assertIn("repos/o/r/issues/5/comments?per_page=100&page=2", self.api.paths)
-        # The list ends at the empty third page.
-        self.assertIn("repos/o/r/issues/5/comments?per_page=100&page=3", self.api.paths)
-        self.assertNotIn("repos/o/r/issues/5/comments?per_page=100&page=4", self.api.paths)
+        # Page 2 has no next link, so no third page is asked for.
+        self.assertNotIn("repos/o/r/issues/5/comments?per_page=100&page=3", self.api.paths)
 
     def test_a_short_page_is_not_taken_as_the_last(self):
         ok, sent_ = self.run_with(
@@ -563,7 +583,7 @@ class TestStripWholeItem(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual([("PATCH", f"{API}/issues/comments/2", "dirty")], sent_)
 
-    def test_a_full_last_page_ends_at_the_empty_one(self):
+    def test_a_full_last_page_with_no_next_link_ends_the_list(self):
         ok, sent_ = self.run_with(
             {
                 "repos/o/r/issues/5": {"number": 5, "body": ""},
@@ -578,7 +598,6 @@ class TestStripWholeItem(unittest.TestCase):
             [
                 "repos/o/r/issues/5",
                 "repos/o/r/issues/5/comments?per_page=100&page=1",
-                "repos/o/r/issues/5/comments?per_page=100&page=2",
             ],
             self.api.paths,
         )
@@ -612,17 +631,23 @@ class TestStripWholeItem(unittest.TestCase):
     def test_a_failed_later_page_keeps_the_earlier_pages_and_says_how_far_it_got(self):
         error = urllib.error.HTTPError("u", 502, "Bad Gateway", {}, None)
         first = [{"id": 1, "body": "dirty" + BYLINE}, {"id": 2, "body": "clean"}]
-        api = FakeApi({"repos/o/r/issues/5": {"number": 5, "body": ""}})
+        api = FakeApi(
+            {
+                "repos/o/r/issues/5": {"number": 5, "body": ""},
+                # The second page stands in for one whose read fails.
+                "repos/o/r/issues/5/comments": [first, []],
+            }
+        )
+        page = api.page
 
         def pages(path, token):
-            if path.endswith("page=1"):
-                return first
             if path.endswith("page=2"):
                 raise error
-            return api(path, token)
+            return page(path, token)
 
+        api.page = pages
         stderr, stdout = io.StringIO(), io.StringIO()
-        with patch("strip_session_bylines.gh_api", side_effect=pages), patch(
+        with fake_api(api), patch(
             "strip_session_bylines._fetch_body", return_value="dirty" + BYLINE
         ), patch("strip_session_bylines.urlopen_https") as mock_open, contextlib.redirect_stderr(
             stderr
@@ -631,6 +656,52 @@ class TestStripWholeItem(unittest.TestCase):
         self.assertEqual([("PATCH", f"{API}/issues/comments/1", "dirty")], writes(mock_open))
         self.assertIn("could not read issues/5/comments after 2 items", stderr.getvalue())
         self.assertNotIn("items read from", stdout.getvalue())
+
+    def test_a_malformed_item_is_named_and_the_run_goes_on(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ok, sent_ = self.run_with(
+                {
+                    "repos/o/r/issues/5": {"number": 5, "body": "", "pull_request": {}},
+                    "repos/o/r/issues/5/comments": [
+                        [None, {"body": "no id" + BYLINE}, {"id": 2, "body": "c" + BYLINE}]
+                    ],
+                    "repos/o/r/pulls/5/reviews": [[{"id": 3, "body": "r" + BYLINE}]],
+                }
+            )
+        self.assertFalse(ok)
+        self.assertEqual(
+            [
+                ("PATCH", f"{API}/issues/comments/2", "c"),
+                ("PUT", f"{API}/pulls/5/reviews/3", "r"),
+            ],
+            sent_,
+        )
+        self.assertEqual(2, stderr.getvalue().count("a listed comment has no id"))
+
+    def test_an_unexpected_error_on_an_item_is_named_and_the_run_goes_on(self):
+        real = ssb._strip_item
+
+        def strip_item(token, repository, kind, body, quiet=False, **ids):
+            if ids.get("id") == 1:
+                raise RuntimeError("boom")
+            return real(token, repository, kind, body, quiet, **ids)
+
+        stderr = io.StringIO()
+        with patch("strip_session_bylines._strip_item", side_effect=strip_item), (
+            contextlib.redirect_stderr(stderr)
+        ):
+            ok, sent_ = self.run_with(
+                {
+                    "repos/o/r/issues/5": {"number": 5, "body": ""},
+                    "repos/o/r/issues/5/comments": [
+                        [{"id": 1, "body": "a" + BYLINE}, {"id": 2, "body": "b" + BYLINE}]
+                    ],
+                }
+            )
+        self.assertFalse(ok)
+        self.assertEqual([("PATCH", f"{API}/issues/comments/2", "b")], sent_)
+        self.assertIn("could not strip comment 1: boom", stderr.getvalue())
 
     def test_a_failed_write_returns_false_and_the_rest_are_still_tried(self):
         ok, sent_ = self.run_with(
@@ -644,8 +715,7 @@ class TestStripWholeItem(unittest.TestCase):
         self.assertEqual(2, len(sent_))
 
     def test_a_failed_fetch_returns_false(self):
-        with patch("strip_session_bylines._fetch_body", return_value=None), patch(
-            "strip_session_bylines.gh_api",
+        with patch("strip_session_bylines._fetch_body", return_value=None), fake_api(
             FakeApi({"repos/o/r/issues/5": {"number": 5, "body": "Issue" + BYLINE}}),
         ), patch("strip_session_bylines.urlopen_https") as mock_open:
             self.assertFalse(ssb.strip_whole_item("tok", "o/r", 5))

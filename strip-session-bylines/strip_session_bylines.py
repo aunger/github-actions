@@ -65,7 +65,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
 
-from github_api import gh_api
+from github_api import gh_api, gh_api_page
 from github_headers import github_headers
 from https_only import urlopen_https
 from session_bylines import strip_bylines
@@ -223,18 +223,49 @@ def handle_pull_request_review(token: str, repository: str, payload: dict) -> bo
 PER_PAGE = 100
 
 
-def _pages(path: str, token: str):
-    """Yield each page of the list at *path* (which has no query string yet).
+def _strip_listed(token: str, repository: str, kind: str, number: int, item: object) -> bool:
+    """Strip one item of a list read in manual mode; return False if that failed.
 
-    Pages are read as they are needed, so a page's items are written before
-    the next page is read.  The list ends at the first empty page, not at a
-    short one, since a short page need not be the last.
-    Raises what gh_api raises.
+    A malformed item, or an unexpected error, is reported against the item and
+    does not stop the rest of the run.
     """
+    if not isinstance(item, dict) or "id" not in item:
+        print(f"Error: a listed {kind} has no id: {item!r:.80}", file=sys.stderr)
+        return False
+    try:
+        outcome = _strip_item(
+            token, repository, kind, item.get("body"), quiet=True, number=number, id=item["id"]
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error: could not strip {kind} {item['id']}: {exc}", file=sys.stderr)
+        return False
+    return outcome != FAILED
+
+
+def _strip_list(token: str, repository: str, number: int, kind: str, path: str) -> bool:
+    """Strip every item of the list at repos/{repository}/{path}, a page at a time.
+
+    A page's items are written before the next page is read.  The Link header
+    says whether another page exists.  Returns False if any read or item failed.
+    """
+    ok = True
+    count = 0
     page = 1
-    while batch := gh_api(f"{path}?per_page={PER_PAGE}&page={page}", token):
-        yield batch
+    more = True
+    while more:
+        try:
+            batch, more = gh_api_page(
+                f"repos/{repository}/{path}?per_page={PER_PAGE}&page={page}", token
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error: could not read {path} after {count} items: {exc}", file=sys.stderr)
+            return False
+        for item in batch or []:
+            count += 1
+            ok = _strip_listed(token, repository, kind, number, item) and ok
         page += 1
+    print(f"#{number}: {count} items read from {path}.")
+    return ok
 
 
 def strip_whole_item(token: str, repository: str, number: int) -> bool:
@@ -265,27 +296,7 @@ def strip_whole_item(token: str, repository: str, number: int) -> bool:
             ("review", f"pulls/{number}/reviews"),
         ]
     for kind, path in lists:
-        count = 0
-        pages = _pages(f"repos/{repository}/{path}", token)
-        while True:
-            # Only the read is guarded, so an error is reported as a read
-            # error only when it is one.
-            try:
-                batch = next(pages)
-            except StopIteration:
-                print(f"#{number}: {count} items read from {path}.")
-                break
-            except Exception as exc:  # noqa: BLE001
-                print(f"Error: could not read {path} after {count} items: {exc}", file=sys.stderr)
-                ok = False
-                break
-            for item in batch:
-                count += 1
-                outcome = _strip_item(
-                    token, repository, kind, item.get("body"),
-                    quiet=True, number=number, id=item.get("id"),
-                )
-                ok = outcome != FAILED and ok
+        ok = _strip_list(token, repository, number, kind, path) and ok
     return ok
 
 
