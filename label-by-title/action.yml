@@ -1,0 +1,46 @@
+name: Label by title
+description: >-
+  Add labels to the issue or pull request of the triggering event whose title
+  matches each label's regular expression. Labels are only added, never
+  removed.
+
+# Caller: an `issues` or `pull_request` workflow with `issues: write` and
+# `pull-requests: write`. To run only on a fresh or changed title, give the job
+# `if: github.event.action == 'opened' || github.event.changes.title` and the
+# triggers `issues: [opened, edited]` and `pull_request: [opened, edited]`.
+# The action needs no checkout.
+
+inputs:
+  rules:
+    description: >-
+      JSON object mapping each label to a regular expression, or to an array of
+      them that count as alternatives. A title matches when the expression is
+      found anywhere in it, case-insensitively; `(?-i:...)` opts part of an
+      expression out. Labels are applied in the spelling given here.
+    required: true
+  skip-on-pull-requests:
+    description: >-
+      JSON array of labels never applied to a pull request, such as those the
+      label-by-files action decides from the changed files with an `any-file`
+      rule, so the title cannot re-add one the files removed.
+    required: false
+    default: '[]'
+  github-token:
+    description: A token with issues and pull-requests write access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Apply labels matching the title
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        ISSUE_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        ISSUE_TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
+        IS_PULL_REQUEST: ${{ github.event.pull_request && 'true' || 'false' }}
+        RULES: ${{ inputs.rules }}
+        SKIP_ON_PULL_REQUESTS: ${{ inputs.skip-on-pull-requests }}
+      run: python3 "$GITHUB_ACTION_PATH/label_by_title.py"

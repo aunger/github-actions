@@ -1,0 +1,53 @@
+name: Enforce mutually exclusive labels
+description: >-
+  When a label is added that belongs to a mutually exclusive set or prefix
+  group, remove the other labels of that set or group from the issue or pull
+  request, so at most one is present.
+
+# Caller: an `issues` or `pull_request` workflow on `labeled`, with
+# `issues: write` (and `pull-requests: write` for pull requests). The action
+# reads the issue or pull request number and the added label from the event,
+# and skips with a warning on an event that has no label. The action needs no
+# checkout. On a fork pull request GITHUB_TOKEN is read-only whatever
+# `permissions:` asks for, so a removal there fails with a 403.
+
+inputs:
+  exclusive-sets:
+    description: >-
+      JSON array of arrays of label names; at most one member of each array
+      belongs on an item. Matching is case-insensitive.
+    required: false
+    default: '[]'
+  exclusive-prefixes:
+    description: >-
+      JSON array of prefixes; at most one label starting with each belongs on
+      an item. Matching is case-insensitive.
+    required: false
+    default: '[]'
+  github-token:
+    description: A token with issues (and pull-requests) write access.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  removed:
+    description: >-
+      JSON array of the labels removed, set once every removal succeeded; empty
+      when nothing was removed. Pass it to check-blocking-labels in the same
+      job as removed-labels.
+    value: ${{ steps.enforce.outputs.removed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Enforce mutually exclusive label sets
+      id: enforce
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+        ADDED_LABEL: ${{ github.event.label.name }}
+        EXCLUSIVE_SETS: ${{ inputs.exclusive-sets }}
+        EXCLUSIVE_PREFIXES: ${{ inputs.exclusive-prefixes }}
+      run: python3 "$GITHUB_ACTION_PATH/enforce_mutually_exclusive_labels.py"

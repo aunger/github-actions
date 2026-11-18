@@ -1,0 +1,37 @@
+name: Label by changed files
+description: >-
+  Add and remove labels on the pull request of the triggering event according
+  to the files it changes: an every-file label when all of them match its
+  globs, never removed; an any-file label when any of them does, removed when
+  none does.
+
+# Caller: a `pull_request` workflow on `[opened, synchronize]` with
+# `issues: write` and `pull-requests: write`. The action needs no checkout.
+# audit_labels_by_files.py beside this file applies the same rules to merged
+# pull requests, reading them from the caller's workflow.
+
+inputs:
+  rules:
+    description: >-
+      JSON object mapping each label to {"mode": "every-file" or "any-file",
+      "paths": [glob, ...]}. Globs are matched case-sensitively against paths
+      from the repository root; `**/` matches any number of directories, a
+      trailing `**` everything below one. Give any-file only to a label the
+      globs define completely, since it is removed when no file matches.
+    required: true
+  github-token:
+    description: A token with issues and pull-requests write access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Apply labels matching the changed files
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        RULES: ${{ inputs.rules }}
+      run: python3 "$GITHUB_ACTION_PATH/label_by_files.py"
