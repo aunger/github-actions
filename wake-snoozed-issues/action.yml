@@ -1,0 +1,39 @@
+name: Wake snoozed issues
+description: >-
+  Reopen each issue whose snooze label's days have passed since it was applied,
+  remove that label and any others the caller lists, and comment that the
+  snooze has run out. An issue no longer closed as not planned, such as one
+  reopened by hand, only loses the spent snooze label.
+
+# Caller: a `schedule` workflow (daily suits day-long snoozes) with
+# `issues: write`, passing the same snooze-labels table as snooze-issues. The
+# action needs no checkout.
+
+inputs:
+  snooze-labels:
+    description: >-
+      JSON object mapping each snooze label to its length in days, such as
+      {"snooze 7 days": 7}. Matching is case-insensitive.
+    required: true
+  remove-on-wake:
+    description: >-
+      JSON array of further labels removed from a woken issue, such as
+      process-state labels that would otherwise have it resume mid-cycle.
+    required: false
+    default: '[]'
+  github-token:
+    description: A token with issues write access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Wake issues past their snooze
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        SNOOZE_LABELS: ${{ inputs.snooze-labels }}
+        REMOVE_ON_WAKE: ${{ inputs.remove-on-wake }}
+      run: python3 "$GITHUB_ACTION_PATH/wake_snoozed_issues.py"

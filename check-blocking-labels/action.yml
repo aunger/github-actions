@@ -1,0 +1,50 @@
+name: Check blocking labels
+description: >-
+  Fail when any open pull request whose head is the triggering pull request's
+  head commit carries a blocking label, so a required check named after the
+  job holds the merge until the label is removed.
+
+# Caller: a `pull_request` workflow on
+# `[opened, reopened, synchronize, labeled, unlabeled, closed]` with
+# `pull-requests: read`, whose job name is the required status check. `closed`
+# matters: closing a pull request can be what unblocks a sibling on the same
+# commit, and without a run on that event the failing verdict the closed one
+# earned stays the newest run on the commit. When the job also runs
+# enforce-mutually-exclusive-labels, run it first and pass its `removed` output
+# as removed-labels. The action needs no checkout. The README describes how
+# this check pairs with the orchestrate plugin's label protocol.
+
+inputs:
+  blocking-labels:
+    description: >-
+      JSON array of the labels that hold a merge while any open pull request at
+      the commit carries one. Matching is case-insensitive.
+    required: true
+  removed-labels:
+    description: >-
+      JSON array of labels an earlier step of this job removed from the
+      triggering pull request, such as enforce-mutually-exclusive-labels'
+      `removed` output; they are dropped from the event payload, which
+      predates the removal.
+    required: false
+    default: ''
+  github-token:
+    description: A token with pull-requests read access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Red to hold merge, not a failure
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_STATE: ${{ github.event.pull_request.state }}
+        PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        BLOCKING_LABELS: ${{ inputs.blocking-labels }}
+        REMOVED_LABELS: ${{ inputs.removed-labels }}
+      run: python3 "$GITHUB_ACTION_PATH/check_blocking_labels.py"

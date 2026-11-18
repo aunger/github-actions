@@ -1,0 +1,55 @@
+name: Propagate issue labels
+description: >-
+  Copy the labels of the issues a pull request closes onto the pull request,
+  skipping any that would displace a mutually exclusive label it already
+  carries and any the caller excludes. Labels are only added, never removed.
+
+# Caller: a `pull_request` workflow with `issues: write` and
+# `pull-requests: write`. GitHub sends no event for a link made from the
+# Development sidebar, so listen for the events a pull request sees again,
+# such as `[opened, edited, reopened]`, with the job gated by
+# `if: github.event.action != 'edited' || github.event.changes.body` so only a
+# body edit re-runs it. Leave out `labeled` and `unlabeled`: a run on
+# `unlabeled` would re-add a label a person just removed. reconcile-issue-labels
+# covers a pull request that sees none of these events. The action needs no
+# checkout.
+
+inputs:
+  excluded-labels:
+    description: >-
+      JSON array of labels never copied, such as process state an issue and its
+      pull request track separately, and labels label-by-files decides from the
+      changed files with an any-file rule.
+    required: false
+    default: '[]'
+  exclusive-sets:
+    description: >-
+      JSON array of arrays of mutually exclusive labels, as given to
+      enforce-mutually-exclusive-labels; a label that would displace one the
+      pull request carries is skipped.
+    required: false
+    default: '[]'
+  exclusive-prefixes:
+    description: >-
+      JSON array of mutually exclusive label prefixes, as given to
+      enforce-mutually-exclusive-labels.
+    required: false
+    default: '[]'
+  github-token:
+    description: A token with issues and pull-requests write access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Propagate linked issue labels
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        EXCLUDED_LABELS: ${{ inputs.excluded-labels }}
+        EXCLUSIVE_SETS: ${{ inputs.exclusive-sets }}
+        EXCLUSIVE_PREFIXES: ${{ inputs.exclusive-prefixes }}
+      run: python3 "$GITHUB_ACTION_PATH/propagate_issue_labels.py"

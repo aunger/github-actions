@@ -1,0 +1,42 @@
+name: Reconcile issue labels
+description: >-
+  Apply propagate-issue-labels' rule to every open pull request, for one linked
+  to an issue from the Development sidebar that saw no event the propagating
+  workflow listens for.
+
+# Caller: a `workflow_dispatch` workflow with `issues: write` and
+# `pull-requests: write`, passing the same tables as its propagate-issue-labels
+# step. On demand rather than on a schedule, since a schedule would poll every
+# open pull request indefinitely for a narrow gap. The action needs no
+# checkout.
+
+inputs:
+  excluded-labels:
+    description: JSON array of labels never copied, as for propagate-issue-labels.
+    required: false
+    default: '[]'
+  exclusive-sets:
+    description: JSON array of arrays of mutually exclusive labels, as for propagate-issue-labels.
+    required: false
+    default: '[]'
+  exclusive-prefixes:
+    description: JSON array of mutually exclusive label prefixes, as for propagate-issue-labels.
+    required: false
+    default: '[]'
+  github-token:
+    description: A token with issues and pull-requests write access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Reconcile issue labels across open pull requests
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        EXCLUDED_LABELS: ${{ inputs.excluded-labels }}
+        EXCLUSIVE_SETS: ${{ inputs.exclusive-sets }}
+        EXCLUSIVE_PREFIXES: ${{ inputs.exclusive-prefixes }}
+      run: python3 "$GITHUB_ACTION_PATH/reconcile_issue_labels.py"

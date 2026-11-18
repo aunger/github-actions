@@ -1,0 +1,36 @@
+name: Snooze issues
+description: >-
+  When a snooze label is added to an open issue, close it as not planned, so
+  it stops reading as open work until wake-snoozed-issues reopens it.
+
+# Caller: an `issues` workflow on `labeled` with `issues: write`. Scope it to
+# issues: closing a pull request abandons work, which is not what a snooze
+# means. List the same snooze labels as one of
+# enforce-mutually-exclusive-labels' exclusive-sets, so an issue carries at
+# most one, and pass the same table to wake-snoozed-issues. The action needs
+# no checkout.
+
+inputs:
+  snooze-labels:
+    description: >-
+      JSON object mapping each snooze label to its length in days, such as
+      {"snooze 7 days": 7}. Matching is case-insensitive.
+    required: true
+  github-token:
+    description: A token with issues write access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Snooze the issue
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        ADDED_LABEL: ${{ github.event.label.name }}
+        EVENT_ACTION: ${{ github.event.action }}
+        SNOOZE_LABELS: ${{ inputs.snooze-labels }}
+      run: python3 "$GITHUB_ACTION_PATH/snooze_issues.py"
