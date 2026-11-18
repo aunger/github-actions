@@ -2,7 +2,7 @@
 """label_common.py: What the label actions share.
 
 - `gh_api`: one call through `github_api.gh_api`, retried with backoff on a
-  transient failure.
+  transient failure by `call_with_retries`, which the GraphQL call uses too.
 - `fetch_open_pull_requests`: every open pull request, page by page.
 - `remove_labels`: one DELETE per label, a 404 counting as already gone.
 - The parsers for the JSON tables a caller passes as `with:` inputs, which
@@ -52,32 +52,32 @@ def is_transient_error(exc: Exception) -> bool:
     return isinstance(exc, urllib.error.URLError)
 
 
-def gh_api(
-    path: str,
-    token: str,
-    method: str = "GET",
-    body: object = None,
+def call_with_retries(
+    call,
+    description: str,
+    retry_read_failures: bool = True,
     max_attempts: int = MAX_ATTEMPTS,
 ) -> object:
-    """Call the API at *path* and return the parsed JSON (None for an empty body).
+    """Return *call*(), retrying it on a transient failure.
 
     A transient failure (see `is_transient_error`) is retried up to
     *max_attempts* times in all. Once they are spent, or on any other error,
     raises ``urllib.error.HTTPError`` or ``urllib.error.URLError``.
+    *description* names the request in the retry log line.
 
     urllib wraps only a failure to send the request in URLError. A failure
     while reading the answer (a read timeout, a dropped connection) comes out
     as a bare OSError or http.client.HTTPException, so it is wrapped in a
     URLError here, for the callers' handlers. The request may have been
-    applied by then, so it is retried only for a method a repeat cannot
-    duplicate: not a POST, which could post a comment twice.
+    applied by then, so it is retried only with *retry_read_failures*, for a
+    request a repeat cannot duplicate.
     """
     backoff = INITIAL_BACKOFF_SECONDS
     for attempt in range(1, max_attempts + 1):
         read_failed = False
         try:
             try:
-                return _gh_api_once(path, token, method=method, body=body)
+                return call()
             except urllib.error.URLError:
                 raise
             except (OSError, http.client.HTTPException) as exc:
@@ -85,17 +85,37 @@ def gh_api(
                 raise urllib.error.URLError(exc) from exc
         except (urllib.error.HTTPError, urllib.error.URLError) as exc:
             last = attempt >= max_attempts
-            if last or not is_transient_error(exc) or (read_failed and method == "POST"):
+            if last or not is_transient_error(exc) or (read_failed and not retry_read_failures):
                 raise
             print(
-                f"Transient error on {method} {path} "
+                f"Transient error on {description} "
                 f"(attempt {attempt}/{max_attempts}): {exc}. "
                 f"Retrying in {backoff:g}s.",
                 file=sys.stderr,
             )
             time.sleep(backoff)
             backoff *= BACKOFF_MULTIPLIER
-    raise AssertionError("gh_api retry loop exited without returning or raising")
+    raise AssertionError("retry loop exited without returning or raising")
+
+
+def gh_api(
+    path: str,
+    token: str,
+    method: str = "GET",
+    body: object = None,
+    max_attempts: int = MAX_ATTEMPTS,
+) -> object:
+    """Call the REST API at *path* and return the parsed JSON (None for an empty body).
+
+    Retried as `call_with_retries` says. A failure while reading the answer
+    is not retried for a POST, which could post a comment twice.
+    """
+    return call_with_retries(
+        lambda: _gh_api_once(path, token, method=method, body=body),
+        f"{method} {path}",
+        retry_read_failures=method != "POST",
+        max_attempts=max_attempts,
+    )
 
 
 # GitHub caps a page of pull requests at 100, so a short page is the last page.

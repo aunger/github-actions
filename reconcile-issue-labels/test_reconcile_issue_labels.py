@@ -156,6 +156,24 @@ class TestMain(unittest.TestCase):
 
         self.assertEqual(calls, [5, 7, 9])
 
+    def test_an_unexpected_error_on_one_pr_does_not_stop_the_rest(self):
+        calls: list[int] = []
+
+        def fake_propagate(owner, name, repo, pr_number, token, config):
+            calls.append(pr_number)
+            if pr_number == 7:
+                raise TimeoutError("read timed out")
+            return True
+
+        with patch.dict(os.environ, self._env(), clear=True):
+            with patch.object(ril, "fetch_open_pr_numbers", return_value=[5, 7, 9]):
+                with patch.object(pil, "propagate_to_pr", side_effect=fake_propagate):
+                    with patch("sys.stderr"):
+                        result = ril.main()
+
+        self.assertEqual([5, 7, 9], calls)
+        self.assertEqual(1, result)
+
     def test_applies_the_exclusions_end_to_end(self):
         """One open PR, closing an issue with an excluded and a conflicting label."""
 

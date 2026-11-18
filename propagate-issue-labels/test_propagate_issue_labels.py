@@ -85,6 +85,50 @@ class TestGraphqlQuery(unittest.TestCase):
             result = pil.graphql_query("query {}", {}, "tok")
         self.assertEqual(result, payload["data"])
 
+    def test_a_502_is_retried(self):
+        payload = {"data": {"x": 1}}
+        error = urllib.error.HTTPError(
+            "https://api.github.com/graphql", 502, "Bad Gateway", {}, None
+        )
+        with patch.object(pil.lc.time, "sleep"):
+            with patch(
+                "urllib.request.urlopen",
+                side_effect=[error, self._make_response(json.dumps(payload).encode())],
+            ) as mock_urlopen:
+                self.assertEqual({"x": 1}, pil.graphql_query("query {}", {}, "tok"))
+        self.assertEqual(2, mock_urlopen.call_count)
+
+    def test_a_read_timeout_is_retried_since_a_query_changes_nothing(self):
+        payload = {"data": {}}
+        with patch.object(pil.lc.time, "sleep"):
+            with patch(
+                "urllib.request.urlopen",
+                side_effect=[
+                    TimeoutError("read timed out"),
+                    self._make_response(json.dumps(payload).encode()),
+                ],
+            ) as mock_urlopen:
+                pil.graphql_query("query {}", {}, "tok")
+        self.assertEqual(2, mock_urlopen.call_count)
+
+    def test_a_persistent_read_timeout_is_a_url_error(self):
+        with patch.object(pil.lc.time, "sleep"):
+            with patch("urllib.request.urlopen", side_effect=TimeoutError("read timed out")):
+                with self.assertRaises(urllib.error.URLError):
+                    pil.graphql_query("query {}", {}, "tok")
+
+    def test_an_answer_that_is_not_json_is_a_runtime_error(self):
+        for body in (b"<html>502</html>", b"[1, 2]"):
+            with self.subTest(body=body):
+                with patch("urllib.request.urlopen", return_value=self._make_response(body)):
+                    with self.assertRaises(RuntimeError):
+                        pil.graphql_query("query {}", {}, "tok")
+
+    def test_propagate_to_pr_reports_an_answer_that_is_not_json(self):
+        with patch("urllib.request.urlopen", return_value=self._make_response(b"<html>")):
+            with patch("sys.stderr"):
+                self.assertFalse(pil.propagate_to_pr("o", "r", "o/r", 5, "tok", pil.Config()))
+
     def test_raises_on_graphql_errors(self):
         payload = {"errors": [{"message": "Could not resolve to a PullRequest"}]}
         response = self._make_response(json.dumps(payload).encode())

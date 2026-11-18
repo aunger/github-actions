@@ -96,17 +96,29 @@ query($owner: String!, $name: String!, $number: Int!) {
 def graphql_query(query: str, variables: dict, token: str) -> dict:
     """Execute a GitHub GraphQL query and return its "data" object.
 
-    Raises ``RuntimeError`` if the response carries a top-level "errors"
-    list (GraphQL reports errors this way even on an HTTP 200), or
-    ``urllib.error.HTTPError``/``URLError`` on request failure.
+    Retried on a transient failure as lc.gh_api is, a failure while reading
+    the answer included, since a query changes nothing. Raises
+    ``RuntimeError`` if the answer is not a JSON object or carries a top-level
+    "errors" list (GraphQL reports errors this way even on an HTTP 200), and
+    ``urllib.error.HTTPError`` or ``URLError`` on a failed request.
     """
     body = json.dumps({"query": query, "variables": variables}).encode()
     headers = github_headers(token)
     headers["Content-Type"] = "application/json"
-    with urlopen_https(
-        GRAPHQL_URL, body, headers=headers, method="POST", timeout=TIMEOUT_SECONDS
-    ) as r:
-        payload = json.loads(r.read())
+
+    def post() -> bytes:
+        with urlopen_https(
+            GRAPHQL_URL, body, headers=headers, method="POST", timeout=TIMEOUT_SECONDS
+        ) as r:
+            return r.read()
+
+    raw = lc.call_with_retries(post, "GraphQL query")
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"GraphQL answer is not JSON ({exc}): {raw[:200]!r}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"GraphQL answer is not an object: {payload!r}")
     if payload.get("errors"):
         raise RuntimeError(f"GraphQL errors: {payload['errors']}")
     return payload.get("data") or {}

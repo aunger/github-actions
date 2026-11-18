@@ -85,7 +85,13 @@ def main() -> int:
 
     all_succeeded = True
     for pr_number in pr_numbers:
-        if not pil.propagate_to_pr(owner, name, repo, pr_number, token, config):
+        # One pull request's unexpected failure must not cost the rest their turn.
+        try:
+            succeeded = pil.propagate_to_pr(owner, name, repo, pr_number, token, config)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error reconciling PR #{pr_number}: {exc}", file=sys.stderr)
+            succeeded = False
+        if not succeeded:
             all_succeeded = False
 
     return 0 if all_succeeded else 1
