@@ -75,10 +75,20 @@ def parse_rules(text: str, name: str = "RULES") -> dict[str, re.Pattern[str]]:
             raise lc.InputError(
                 f"{name}: {label!r} must map to a regex or a non-empty array of regexes"
             )
+        # Each alternative must compile on its own: grouped and joined, "(a"
+        # and "b)" would compile together into one regex neither meant.
+        for alternative in alternatives:
+            try:
+                re.compile(alternative, re.IGNORECASE)
+            except re.error as exc:
+                raise lc.InputError(
+                    f"{name}: {label!r} has an invalid regex {alternative!r}: {exc}"
+                ) from exc
         pattern = "|".join(f"(?:{a})" for a in alternatives)
         try:
             rules[label.strip()] = re.compile(pattern, re.IGNORECASE)
         except re.error as exc:
+            # A global flag such as (?i) compiles alone but not past the start.
             raise lc.InputError(f"{name}: {label!r} is not a valid regex: {exc}") from exc
     return rules
 
