@@ -177,7 +177,7 @@ class TestMain(unittest.TestCase):
     def test_applies_the_exclusions_end_to_end(self):
         """One open PR, closing an issue with an excluded and a conflicting label."""
 
-        def fake_api(path, token, method="GET", body=None):
+        def fake_api(path, token, method="GET", body=None, **_kwargs):
             if path.startswith("repos/owner/repo/pulls?"):
                 return [{"number": 5}]
             if method == "POST":

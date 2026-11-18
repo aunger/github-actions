@@ -202,7 +202,7 @@ class TestApplyLabels(unittest.TestCase):
         error = urllib.error.HTTPError(url=None, code=422, msg="Unprocessable", hdrs=None, fp=None)
         calls = []
 
-        def fake_api(path, token, method="GET", body=None):
+        def fake_api(path, token, method="GET", body=None, **_kwargs):
             calls.append(path)
             if "/1/" in path:
                 raise error
@@ -219,7 +219,7 @@ class TestApplyLabels(unittest.TestCase):
         self.assertFalse(result)
 
     def test_one_failure_among_several_still_reports_failure(self):
-        def fake_api(path, token, method="GET", body=None):
+        def fake_api(path, token, method="GET", body=None, **_kwargs):
             if "/2/" in path:
                 raise urllib.error.HTTPError(
                     url=None, code=500, msg="Server Error", hdrs=None, fp=None

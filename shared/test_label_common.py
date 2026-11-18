@@ -179,6 +179,50 @@ class TestGhApiReadFailures(unittest.TestCase):
                     self.assertFalse(lc.remove_labels(1, ["p1", "p2"], "o/r", "tok"))
 
 
+class TestGhApiIdempotency(unittest.TestCase):
+    """A POST that a repeat could apply twice is retried only when GitHub did not act."""
+
+    def _post(self, side_effect, **kwargs):
+        with patch.object(lc.time, "sleep"):
+            with patch("urllib.request.urlopen", side_effect=side_effect) as mock_urlopen:
+                try:
+                    lc.gh_api(
+                        "repos/o/r/issues/1/comments", "tok", method="POST", body={}, **kwargs
+                    )
+                except urllib.error.URLError:
+                    pass
+        return mock_urlopen.call_count
+
+    def test_a_5xx_on_a_post_is_not_retried(self):
+        # A gateway can answer 502 after GitHub stored the comment.
+        self.assertEqual(1, self._post([_http_error(502), _response(b"{}")]))
+
+    def test_a_429_on_a_post_is_retried(self):
+        self.assertEqual(2, self._post([_http_error(429), _response(b"{}")]))
+
+    def test_a_failure_to_send_a_post_is_retried(self):
+        error = urllib.error.URLError(ConnectionRefusedError("refused"))
+        self.assertEqual(2, self._post([error, _response(b"{}")]))
+
+    def test_an_idempotent_post_is_retried_on_a_5xx(self):
+        self.assertEqual(2, self._post([_http_error(502), _response(b"{}")], idempotent=True))
+
+    def test_add_labels_is_retried_on_a_5xx(self):
+        with patch.object(lc.time, "sleep"):
+            with patch(
+                "urllib.request.urlopen", side_effect=[_http_error(502), _response(b"[]")]
+            ) as mock_urlopen:
+                lc.add_labels("o/r", 1, ["ci"], "tok")
+        self.assertEqual(2, mock_urlopen.call_count)
+
+    def test_a_write_whose_answer_is_discarded_does_not_read_it(self):
+        response = _response(b"not json at all")
+        with patch("urllib.request.urlopen", return_value=response):
+            lc.add_labels("o/r", 1, ["ci"], "tok")
+            self.assertTrue(lc.remove_labels(1, ["ci"], "o/r", "tok"))
+        response.__enter__.return_value.read.assert_not_called()
+
+
 class TestIsTransientError(unittest.TestCase):
     def test_5xx_is_transient(self):
         for code in (500, 502, 503, 504, 599):
@@ -294,7 +338,12 @@ class TestAddLabels(unittest.TestCase):
         with patch.object(lc, "gh_api") as gh_api:
             lc.add_labels("o/r", 7, ["ci", "p1"], "tok")
         gh_api.assert_called_once_with(
-            "repos/o/r/issues/7/labels", token="tok", method="POST", body={"labels": ["ci", "p1"]}
+            "repos/o/r/issues/7/labels",
+            token="tok",
+            method="POST",
+            body={"labels": ["ci", "p1"]},
+            idempotent=True,
+            read_response=False,
         )
 
     def test_an_api_error_propagates(self):
@@ -312,7 +361,7 @@ def _fail_on(label_fragment: str):
     """A gh_api stand-in that records paths and raises a 500 for one label."""
     paths: list[str] = []
 
-    def fake_api(path, token, method="GET", body=None):
+    def fake_api(path, token, method="GET", body=None, **_kwargs):
         paths.append(path)
         if label_fragment in path:
             raise _http_error(500)

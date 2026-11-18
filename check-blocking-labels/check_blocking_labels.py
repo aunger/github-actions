@@ -288,6 +288,11 @@ def main() -> int:
         number = pull_request["number"]
         if number == pr_number and pr_state != "open":
             continue
+        # REMOVED_LABELS narrows the payload only. A removed label the listing
+        # still shows may have been added back since, and the run its event
+        # started can finish before this one; landing last, this run must not
+        # open the gate on a label that is there. A listing that merely lags
+        # over-blocks until the next event, the safe direction.
         candidates.setdefault(number, []).extend(label_names(pull_request))
 
     listed = ", ".join(f"#{number}" for number in sorted(candidates)) or "none"

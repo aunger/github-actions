@@ -55,7 +55,7 @@ def is_transient_error(exc: Exception) -> bool:
 def call_with_retries(
     call,
     description: str,
-    retry_read_failures: bool = True,
+    idempotent: bool = True,
     max_attempts: int = MAX_ATTEMPTS,
 ) -> object:
     """Return *call*(), retrying it on a transient failure.
@@ -68,9 +68,13 @@ def call_with_retries(
     urllib wraps only a failure to send the request in URLError. A failure
     while reading the answer (a read timeout, a dropped connection) comes out
     as a bare OSError or http.client.HTTPException, so it is wrapped in a
-    URLError here, for the callers' handlers. The request may have been
-    applied by then, so it is retried only with *retry_read_failures*, for a
-    request a repeat cannot duplicate.
+    URLError here, for the callers' handlers.
+
+    A request that is not *idempotent*, such as posting a comment, could be
+    applied twice by a repeat, so after a failure that may follow the write
+    (a read failure, or a 5xx, which a gateway can return after GitHub stored
+    it) it is not retried. A 429 and a failure to send are, since GitHub did
+    not act on either.
     """
     backoff = INITIAL_BACKOFF_SECONDS
     for attempt in range(1, max_attempts + 1):
@@ -85,7 +89,10 @@ def call_with_retries(
                 raise urllib.error.URLError(exc) from exc
         except (urllib.error.HTTPError, urllib.error.URLError) as exc:
             last = attempt >= max_attempts
-            if last or not is_transient_error(exc) or (read_failed and not retry_read_failures):
+            may_have_applied = read_failed or (
+                isinstance(exc, urllib.error.HTTPError) and exc.code != 429
+            )
+            if last or not is_transient_error(exc) or (may_have_applied and not idempotent):
                 raise
             print(
                 f"Transient error on {description} "
@@ -104,16 +111,22 @@ def gh_api(
     method: str = "GET",
     body: object = None,
     max_attempts: int = MAX_ATTEMPTS,
+    idempotent: bool | None = None,
+    read_response: bool = True,
 ) -> object:
     """Call the REST API at *path* and return the parsed JSON (None for an empty body).
 
-    Retried as `call_with_retries` says. A failure while reading the answer
-    is not retried for a POST, which could post a comment twice.
+    Retried as `call_with_retries` says. *idempotent* defaults to True for
+    every method but POST, which could post a comment twice; a caller whose
+    POST a repeat cannot duplicate, such as adding labels, passes True. With
+    *read_response* false the answer is not read, for a write whose echo the
+    caller discards, so a cut-off answer cannot turn an applied write into an
+    error.
     """
     return call_with_retries(
-        lambda: _gh_api_once(path, token, method=method, body=body),
+        lambda: _gh_api_once(path, token, method=method, body=body, read_response=read_response),
         f"{method} {path}",
-        retry_read_failures=method != "POST",
+        idempotent=method != "POST" if idempotent is None else idempotent,
         max_attempts=max_attempts,
     )
 
@@ -157,12 +170,18 @@ def fetch_label_names(repo: str, number: int, token: str) -> list[str]:
 
 
 def add_labels(repo: str, number: int, labels: list[str], token: str) -> None:
-    """Add *labels* to issue or pull request *number*; raises as gh_api does."""
+    """Add *labels* to issue or pull request *number*; raises as gh_api does.
+
+    Adding a label already there changes nothing, so the POST is retried as
+    an idempotent request.
+    """
     gh_api(
         f"repos/{repo}/issues/{number}/labels",
         token=token,
         method="POST",
         body={"labels": labels},
+        idempotent=True,
+        read_response=False,
     )
 
 
@@ -189,6 +208,7 @@ def remove_labels(
                 f"repos/{repo}/issues/{number}/labels/{encoded}",
                 token=token,
                 method="DELETE",
+                read_response=False,
             )
             print(f"Removed {reason} label '{label}' from #{number}.")
         except urllib.error.HTTPError as exc:

@@ -5,6 +5,8 @@ When a label is added that belongs to one of the caller's EXCLUSIVE_SETS, or
 starts with one of its EXCLUSIVE_PREFIXES, every other label the item carries
 from the same set, or with the same prefix, is removed. Matching is
 case-insensitive. The label just added always stays: the newest choice wins.
+A run whose label is no longer on the item when it reads the labels does
+nothing, so a later choice is not undone by an earlier run.
 
 Usage:
     python3 enforce_mutually_exclusive_labels.py
@@ -109,6 +111,14 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"Error fetching issue #{issue_number}: {exc}", file=sys.stderr)
         return 1
+
+    # Two runs for two labels of one set, started close together, would each
+    # remove the other's. A run whose label is already gone stands aside, so
+    # the later choice wins; runs that read the labels at the same moment can
+    # still race.
+    if added_label.lower() not in {label.lower() for label in current_labels}:
+        print(f"Label '{added_label}' is no longer on #{issue_number}--nothing to do.")
+        return 0
 
     to_remove = rules.conflicts(added_label, current_labels)
     if not to_remove:

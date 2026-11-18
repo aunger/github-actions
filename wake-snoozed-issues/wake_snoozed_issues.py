@@ -162,8 +162,13 @@ def wake_issue(
     narrower window between this fetch and the DELETE calls survives, since
     remove_labels() only ever removes the labels it is explicitly told to.
 
+    An issue that is no longer closed as not planned (reopened by hand, or
+    closed as completed) is not woken: only its spent snooze label is removed.
+
     Returns True if the issue was woken (reopened and stripped), False if it
-    turned out to no longer be snoozed under *snooze_label* (left untouched).
+    turned out to no longer be snoozed under *snooze_label*. Raises
+    RuntimeError if the snooze label could not be removed, so the caller logs
+    a failure, and no comment is posted.
     """
     issue = lc.gh_api(f"repos/{repo}/issues/{issue_number}", token=token)
     if not isinstance(issue, dict):
@@ -178,11 +183,22 @@ def wake_issue(
         )
         return False
 
-    to_remove = [
-        lbl
-        for lbl in current_labels
-        if lbl.lower() == snooze_lower or lbl.lower() in remove_on_wake
-    ]
+    snooze_name = next(lbl for lbl in current_labels if lbl.lower() == snooze_lower)
+
+    # Someone reopened the issue by hand, or closed it another way, with the
+    # label still on: it is no longer waiting out the snooze, so only the
+    # spent label comes off, and its live state and labels are left alone.
+    if issue.get("state") != "closed" or issue.get("state_reason") != "not_planned":
+        print(
+            f"#{issue_number} is {issue.get('state')} "
+            f"({issue.get('state_reason') or 'no reason'}), not snoozed--removing only "
+            f"its spent '{snooze_label}' label."
+        )
+        if not lc.remove_labels(issue_number, [snooze_name], repo, token, reason="expired-snooze"):
+            raise RuntimeError(f"could not remove '{snooze_name}' from #{issue_number}")
+        return False
+
+    others = [lbl for lbl in current_labels if lbl.lower() in remove_on_wake]
 
     # Reopening the issue's state never touches its labels at all--no PATCH
     # body key for labels is sent here, so there is nothing for this call to
@@ -192,10 +208,17 @@ def wake_issue(
         token=token,
         method="PATCH",
         body={"state": "open"},
+        read_response=False,
     )
-    lc.remove_labels(issue_number, to_remove, repo, token, reason="expired-snooze")
+    # The snooze label goes first and alone: while it stays, every run would
+    # wake the issue again and post another comment. Left on an open issue,
+    # the next run removes it by the branch above, with no comment.
+    if not lc.remove_labels(issue_number, [snooze_name], repo, token, reason="expired-snooze"):
+        raise RuntimeError(f"reopened #{issue_number} but could not remove '{snooze_name}'")
+    if others and not lc.remove_labels(issue_number, others, repo, token, reason="expired-snooze"):
+        print(f"#{issue_number}: some of {others} could not be removed.", file=sys.stderr)
 
-    other_stripped = sorted(lbl for lbl in to_remove if lbl.lower() != snooze_lower)
+    other_stripped = sorted(others)
     stripped_note = ""
     if other_stripped:
         stripped_note = f" Also removed label(s): {', '.join(other_stripped)}."

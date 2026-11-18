@@ -66,6 +66,7 @@ def snooze_issue(issue_number: int, snooze_label: str, repo: str, token: str) ->
         token=token,
         method="PATCH",
         body={"state": "closed", "state_reason": "not_planned"},
+        read_response=False,
     )
     print(f"Closed #{issue_number} for its '{snooze_label}' snooze.")
     return True

@@ -67,13 +67,19 @@ class TestMain(unittest.TestCase):
     def tearDown(self):
         self._env_patch.stop()
 
-    def _run(self, added: str, labels: list[str] | None, *responses) -> tuple[int, list, str]:
+    def _run(
+        self, added: str, labels: list[str] | None, *responses, include_added: bool = True
+    ) -> tuple[int, list, str]:
         """Run main() for *added* on an item carrying *labels*.
 
-        *labels* None means the API is not expected to be called. *responses*
-        answer the calls after the label read, one each. Returns (exit code,
-        the gh_api calls, combined output).
+        The item carries *added* as well, as it does on a real `labeled` event,
+        unless *include_added* is false. *labels* None means the API is not
+        expected to be called. *responses* answer the calls after the label
+        read, one each. Returns (exit code, the gh_api calls, combined output).
         """
+        carried = {label.lower() for label in labels or []}
+        if labels is not None and include_added and added.lower() not in carried:
+            labels = [*labels, added]
         side_effect = [] if labels is None else [_issue(labels), *responses]
         out = io.StringIO()
         with patch.dict(os.environ, {"ADDED_LABEL": added}):
@@ -88,6 +94,14 @@ class TestMain(unittest.TestCase):
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------
+
+    def test_a_label_no_longer_on_the_item_stands_aside(self):
+        # A later run for another member of the set removed this one already;
+        # removing that member now would leave the item with neither.
+        code, calls, out = self._run("c-a-x", ["c-a-y"], include_added=False)
+        self.assertEqual(0, code)
+        self.assertEqual([], self._deleted(calls))
+        self.assertIn("no longer on #42", out)
 
     def test_an_event_other_than_labeled_is_a_skip(self):
         # An `unlabeled` event names the label removed, which must not be
@@ -266,17 +280,17 @@ class TestMain(unittest.TestCase):
                 return result, f.read()
 
     def test_removed_output_names_each_removed_label(self):
-        result, output = self._main_with_output([_issue(["p2", "p3", "ci"]), None, None])
+        result, output = self._main_with_output([_issue(["p1", "p2", "p3", "ci"]), None, None])
         self.assertEqual(result, 0)
         self.assertEqual(output, 'removed=["p2", "p3"]\n')
 
     def test_removed_output_includes_a_label_already_gone(self):
-        result, output = self._main_with_output([_issue(["p2"]), _http_error(404)])
+        result, output = self._main_with_output([_issue(["p1", "p2"]), _http_error(404)])
         self.assertEqual(result, 0)
         self.assertEqual(output, 'removed=["p2"]\n')
 
     def test_no_removed_output_when_a_removal_fails(self):
-        result, output = self._main_with_output([_issue(["p2"]), _http_error(500)])
+        result, output = self._main_with_output([_issue(["p1", "p2"]), _http_error(500)])
         self.assertEqual(result, 1)
         self.assertEqual(output, "")
 

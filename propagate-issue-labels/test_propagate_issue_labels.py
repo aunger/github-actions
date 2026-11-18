@@ -505,7 +505,7 @@ class TestPropagateToPr(unittest.TestCase):
         self.assertEqual(post_calls, [])
 
     def test_apply_failure_returns_false(self):
-        def fake_api(path, token, method="GET", body=None):
+        def fake_api(path, token, method="GET", body=None, **_kwargs):
             if method == "POST":
                 raise urllib.error.HTTPError(
                     url=None, code=422, msg="Unprocessable Entity", hdrs=None, fp=None
