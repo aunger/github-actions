@@ -2,7 +2,7 @@
 """Apply labels to an issue or pull request whose title matches each label's regex.
 
 The caller's RULES map each label to a regular expression, or to an array of
-them that count as alternatives. Matching is a case-insensitive search of the
+them that count as alternatives, each compiled on its own. Matching is a case-insensitive search of the
 title, so a rule anchors itself if it needs to; an inline `(?-i:...)` group
 opts part of a rule out of case-insensitivity.
 
@@ -41,6 +41,7 @@ import os
 import re
 import sys
 import urllib.error
+from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
 
@@ -51,18 +52,37 @@ import label_common as lc
 # ---------------------------------------------------------------------------
 
 
-def parse_rules(text: str, name: str = "RULES") -> dict[str, re.Pattern[str]]:
+@dataclass(frozen=True)
+class TitleRule:
+    """One label's alternatives, each compiled on its own.
+
+    Kept apart rather than joined into one regex, so an alternative's group
+    numbers, backreferences and leading flags mean what they mean alone.
+    """
+
+    patterns: tuple[re.Pattern[str], ...]
+
+    @property
+    def pattern(self) -> str:
+        """The alternatives as one regex's text, for display."""
+        return "|".join(f"(?:{p.pattern})" for p in self.patterns)
+
+    def search(self, title: str) -> bool:
+        return any(p.search(title) for p in self.patterns)
+
+
+def parse_rules(text: str, name: str = "RULES") -> dict[str, TitleRule]:
     """Parse *text*, a JSON object of label: regex or array of regexes.
 
-    An array's entries are alternatives, each grouped before they are joined,
-    so one alternative's `|` cannot leak into the next. Raises lc.InputError on
-    a malformed table or a regex that does not compile. The labels keep the
-    spelling the caller gave them, which is the spelling they are applied in.
+    An array's entries are alternatives: a title matches when any one of them
+    is found in it. Raises lc.InputError on a malformed table or a regex that
+    does not compile. The labels keep the spelling the caller gave them, which
+    is the spelling they are applied in.
     """
     data = lc.load_json(name, text)
     if not isinstance(data, dict) or not data:
         raise lc.InputError(f"{name} must be a non-empty JSON object of label: regex")
-    rules: dict[str, re.Pattern[str]] = {}
+    rules: dict[str, TitleRule] = {}
     seen: set[str] = set()
     for label, rule in data.items():
         if not isinstance(label, str) or not label.strip():
@@ -75,27 +95,21 @@ def parse_rules(text: str, name: str = "RULES") -> dict[str, re.Pattern[str]]:
             raise lc.InputError(
                 f"{name}: {label!r} must map to a regex or a non-empty array of regexes"
             )
-        # Each alternative must compile on its own: grouped and joined, "(a"
-        # and "b)" would compile together into one regex neither meant.
+        patterns = []
         for alternative in alternatives:
             try:
-                re.compile(alternative, re.IGNORECASE)
+                patterns.append(re.compile(alternative, re.IGNORECASE))
             except re.error as exc:
                 raise lc.InputError(
                     f"{name}: {label!r} has an invalid regex {alternative!r}: {exc}"
                 ) from exc
-        pattern = "|".join(f"(?:{a})" for a in alternatives)
-        try:
-            rules[label.strip()] = re.compile(pattern, re.IGNORECASE)
-        except re.error as exc:
-            # A global flag such as (?i) compiles alone but not past the start.
-            raise lc.InputError(f"{name}: {label!r} is not a valid regex: {exc}") from exc
+        rules[label.strip()] = TitleRule(tuple(patterns))
     return rules
 
 
 def matching_labels(
     title: str,
-    rules: dict[str, re.Pattern[str]],
+    rules: dict[str, TitleRule],
     is_pull_request: bool = False,
     skip_on_pull_requests: frozenset[str] = frozenset(),
 ) -> list[str]:

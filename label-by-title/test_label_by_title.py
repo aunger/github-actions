@@ -529,9 +529,6 @@ class TestParseRules(unittest.TestCase):
         self.assertEqual(["docs"], lpt.matching_labels("Update the changelog", rules))
         self.assertEqual([], lpt.matching_labels("Update the build", rules))
 
-    # parse_rules wraps each alternative in (?:...) and joins them, which still
-    # compiles "(a" and "b)" as "(?:(a)|(?:b))". Remove this decorator once
-    # parse_rules compiles each alternative on its own first.
     def test_each_alternative_must_be_a_whole_regex_on_its_own(self):
         # Joined, "(a" and "b)" read as one valid regex; each alone is not.
         self.assert_refused('{"x": ["(a", "b)"]}', "'x'")
@@ -554,9 +551,23 @@ class TestParseRules(unittest.TestCase):
         rules = lpt.parse_rules('{"Docs": "readme", "CI": "ci"}')
         self.assertEqual(["Docs", "CI"], lpt.matching_labels("ci readme", rules))
 
-    def test_patterns_are_compiled_regexes(self):
-        for pattern in RULES.values():
-            self.assertIsInstance(pattern, re.Pattern)
+    def test_each_alternative_is_compiled_on_its_own(self):
+        for rule in RULES.values():
+            self.assertTrue(rule.patterns)
+            for pattern in rule.patterns:
+                self.assertIsInstance(pattern, re.Pattern)
+        self.assertEqual(8, len(RULES["ci"].patterns))
+
+    def test_a_backreference_counts_groups_within_its_own_alternative(self):
+        # Joined into one regex, the second alternative's \1 would name the
+        # first alternative's group and never match.
+        rules = lpt.parse_rules(r'{"dup": ["(fix)", "(bug) \\1"]}')
+        self.assertEqual(["dup"], lpt.matching_labels("bug bug", rules))
+
+    def test_a_leading_flag_applies_to_its_own_alternative(self):
+        rules = lpt.parse_rules('{"x": ["first", "(?-i:Second)"]}')
+        self.assertEqual(["x"], lpt.matching_labels("Second", rules))
+        self.assertEqual([], lpt.matching_labels("second", rules))
 
     def test_the_gb4pc_fixture_parses_to_its_three_labels(self):
         self.assertEqual(["ci", "agents", "automated tests"], list(RULES))

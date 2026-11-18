@@ -109,9 +109,11 @@ def parse_rules(text: str, name: str = "RULES") -> list[Rule]:
             or not all(isinstance(g, str) and g for g in globs)
         ):
             raise lc.InputError(f"{name}: {label!r} paths must be a non-empty array of globs")
-        rules.append(
-            Rule(label.strip(), rule["mode"], tuple(globs), tuple(glob_regex(g) for g in globs))
-        )
+        try:
+            patterns = tuple(glob_regex(g) for g in globs)
+        except re.error as exc:
+            raise lc.InputError(f"{name}: {label!r} has an invalid glob: {exc}") from exc
+        rules.append(Rule(label.strip(), rule["mode"], tuple(globs), patterns))
     return rules
 
 

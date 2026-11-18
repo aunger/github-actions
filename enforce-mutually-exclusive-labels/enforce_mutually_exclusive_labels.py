@@ -29,6 +29,8 @@ Required environment variables:
     ADDED_LABEL         Name of the label just added
 
 Optional environment variables:
+    EVENT_ACTION        github.event.action; any value but "labeled" is a skip,
+                        since an `unlabeled` event names the label removed
     EXCLUSIVE_SETS      JSON array of arrays of labels; at most one member of
                         each array belongs on an item
     EXCLUSIVE_PREFIXES  JSON array of prefixes; at most one label starting
@@ -65,6 +67,11 @@ def main() -> int:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     issue_number_str = os.environ.get("ISSUE_NUMBER", "")
     added_label = os.environ.get("ADDED_LABEL", "")
+
+    event_action = os.environ.get("EVENT_ACTION", "")
+    if event_action and event_action != "labeled":
+        print(f"Event action '{event_action}' is not 'labeled'--skipping enforcement.")
+        return 0
 
     for name, value in (
         ("GITHUB_TOKEN", token),

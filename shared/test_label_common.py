@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for label_common.py."""
 
+import http.client
 import io
 import json
 import os
@@ -132,6 +133,50 @@ class TestGhApi(unittest.TestCase):
         b0 = lc.INITIAL_BACKOFF_SECONDS
         m = lc.BACKOFF_MULTIPLIER
         self.assertEqual(delays, [b0, b0 * m, b0 * m * m])
+
+
+class TestGhApiReadFailures(unittest.TestCase):
+    """A failure while reading the answer, which urllib does not wrap in URLError."""
+
+    def test_a_read_timeout_on_a_get_is_wrapped_and_retried(self):
+        payload = {"labels": []}
+        with patch.object(lc.time, "sleep"):
+            with patch(
+                "urllib.request.urlopen",
+                side_effect=[
+                    TimeoutError("read timed out"),
+                    _response(json.dumps(payload).encode()),
+                ],
+            ) as mock_urlopen:
+                self.assertEqual(payload, lc.gh_api("repos/o/r/issues/1", token="tok"))
+        self.assertEqual(2, mock_urlopen.call_count)
+
+    def test_a_dropped_connection_on_a_delete_is_retried(self):
+        with patch.object(lc.time, "sleep"):
+            with patch(
+                "urllib.request.urlopen",
+                side_effect=[http.client.RemoteDisconnected("gone"), _response(b"")],
+            ) as mock_urlopen:
+                lc.gh_api("repos/o/r/issues/1/labels/p1", token="tok", method="DELETE")
+        self.assertEqual(2, mock_urlopen.call_count)
+
+    def test_a_read_failure_on_a_post_is_raised_as_url_error_without_a_retry(self):
+        # The POST may have been applied; a repeat could post a comment twice.
+        with patch.object(lc.time, "sleep") as mock_sleep:
+            with patch(
+                "urllib.request.urlopen", side_effect=TimeoutError("read timed out")
+            ) as mock_urlopen:
+                with self.assertRaises(urllib.error.URLError) as caught:
+                    lc.gh_api("repos/o/r/issues/1/comments", token="tok", method="POST", body={})
+        self.assertIsInstance(caught.exception.reason, TimeoutError)
+        self.assertEqual(1, mock_urlopen.call_count)
+        mock_sleep.assert_not_called()
+
+    def test_remove_labels_reports_a_persistent_read_timeout_and_goes_on(self):
+        with patch.object(lc.time, "sleep"):
+            with patch("urllib.request.urlopen", side_effect=TimeoutError("read timed out")):
+                with redirect_stdout(io.StringIO()), patch("sys.stderr", io.StringIO()):
+                    self.assertFalse(lc.remove_labels(1, ["p1", "p2"], "o/r", "tok"))
 
 
 class TestIsTransientError(unittest.TestCase):
@@ -381,6 +426,15 @@ class TestLoadJson(unittest.TestCase):
     def test_invalid_json_names_the_input(self):
         with self.assertRaisesRegex(lc.InputError, "^X is not valid JSON"):
             lc.load_json("X", "[p1, p2]")
+
+    def test_a_key_repeated_exactly_is_refused(self):
+        # json.loads alone would keep only the last value, hiding an entry.
+        with self.assertRaisesRegex(lc.InputError, "^X: 'ci' is listed twice"):
+            lc.load_json("X", '{"ci": "a", "ci": "b"}')
+
+    def test_a_repeated_key_in_a_nested_object_is_refused(self):
+        with self.assertRaisesRegex(lc.InputError, "listed twice"):
+            lc.load_json("X", '{"ci": {"mode": "any-file", "mode": "every-file"}}')
 
     def test_input_error_is_a_value_error(self):
         self.assertTrue(issubclass(lc.InputError, ValueError))

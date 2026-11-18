@@ -89,6 +89,21 @@ class TestMain(unittest.TestCase):
     # Configuration
     # ------------------------------------------------------------------
 
+    def test_an_event_other_than_labeled_is_a_skip(self):
+        # An `unlabeled` event names the label removed, which must not be
+        # enforced as though it had been added.
+        with patch.dict(os.environ, {"EVENT_ACTION": "unlabeled"}):
+            code, calls, out = self._run("verified", None)
+        self.assertEqual(0, code)
+        self.assertEqual([], calls)
+        self.assertIn("not 'labeled'", out)
+
+    def test_a_labeled_event_is_enforced(self):
+        with patch.dict(os.environ, {"EVENT_ACTION": "labeled"}):
+            code, calls, _ = self._run("p1", ["p1", "p2"], None)
+        self.assertEqual(0, code)
+        self.assertEqual(["p2"], self._deleted(calls))
+
     def test_exit_0_when_a_required_variable_is_missing(self):
         for name in ("GITHUB_TOKEN", "GITHUB_REPOSITORY", "ISSUE_NUMBER", "ADDED_LABEL"):
             with self.subTest(missing=name):
@@ -294,6 +309,7 @@ class TestActionWiring(unittest.TestCase):
         self.assertIn("github.event.issue.number", env["ISSUE_NUMBER"])
         self.assertIn("github.event.pull_request.number", env["ISSUE_NUMBER"])
         self.assertEqual(env["ADDED_LABEL"], "${{ github.event.label.name }}")
+        self.assertEqual(env["EVENT_ACTION"], "${{ github.event.action }}")
 
     def test_the_tables_default_to_none(self):
         for name in ("exclusive-sets", "exclusive-prefixes"):

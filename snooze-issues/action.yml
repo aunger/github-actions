@@ -31,5 +31,6 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         ISSUE_NUMBER: ${{ github.event.issue.number }}
         ADDED_LABEL: ${{ github.event.label.name }}
+        EVENT_ACTION: ${{ github.event.action }}
         SNOOZE_LABELS: ${{ inputs.snooze-labels }}
       run: python3 "$GITHUB_ACTION_PATH/snooze_issues.py"

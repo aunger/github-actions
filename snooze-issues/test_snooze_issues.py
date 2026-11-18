@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Unit tests for snooze_issues.py."""
 
+import io
 import json
 import os
 import sys
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -112,6 +114,13 @@ class TestMain(unittest.TestCase):
         with patch.dict(os.environ, {"ISSUE_NUMBER": ""}):
             result = si.main()
         self.assertEqual(result, 0)
+
+    def test_an_event_other_than_labeled_is_a_skip(self):
+        with patch.dict(os.environ, {"EVENT_ACTION": "unlabeled"}):
+            with patch.object(lc, "gh_api") as mock_api:
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(0, si.main())
+        mock_api.assert_not_called()
 
     def test_exit_0_when_added_label_missing(self):
         with patch.dict(os.environ, {"ADDED_LABEL": ""}):

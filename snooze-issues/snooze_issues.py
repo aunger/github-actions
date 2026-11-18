@@ -33,6 +33,10 @@ Required environment variables:
     ISSUE_NUMBER        Number of the issue
     ADDED_LABEL         Name of the label just added
     SNOOZE_LABELS       JSON object, snooze label: days
+
+Optional environment variables:
+    EVENT_ACTION        github.event.action; any value but "labeled" is a skip,
+                        since an `unlabeled` event names the label removed
 """
 
 import os
@@ -72,6 +76,11 @@ def main() -> int:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     issue_number_str = os.environ.get("ISSUE_NUMBER", "")
     added_label = os.environ.get("ADDED_LABEL", "")
+
+    event_action = os.environ.get("EVENT_ACTION", "")
+    if event_action and event_action != "labeled":
+        print(f"Event action '{event_action}' is not 'labeled'--skipping snooze.")
+        return 0
 
     for name, value in (
         ("GITHUB_TOKEN", token),

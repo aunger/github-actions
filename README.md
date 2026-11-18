@@ -77,7 +77,7 @@ A project using both pairs them like this:
   The two review pairs stay apart because they track different things, the before-merging items and the Author and Reviewer round: one set would let `verified` remove `changes requested` and open the gate.
 - Enforcement runs first because it can remove a blocking label (adding `orchestrate` removes `orchestrating`), and a removal made with `GITHUB_TOKEN` starts no new run, so the gate must hear about it in the same job.
 - The project's `.claude/orchestrate.json` leaves the gate's check off `named_checks` and matches it with `ignored_check_regex`: it is red by design for the whole cycle, so the cycle neither waits for it to pass nor treats it as a failure.
-- `propagate-issue-labels` lists the protocol's six labels (`orchestrate` to `verified` above) in `excluded-labels`, since an issue and its pull request carry them separately, and `wake-snoozed-issues` lists them in `remove-on-wake`, so a woken issue does not resume mid-cycle.
+- `propagate-issue-labels` lists the protocol's six labels (`orchestrate`, `orchestrating`, `verification needed`, `verified`, `changes requested` and `changes done`) in `excluded-labels`, since an issue and its pull request carry them separately, and `wake-snoozed-issues` lists them in `remove-on-wake`, so a woken issue does not resume mid-cycle.
 
 The orchestrate plugin's README lists the protocol's labels from its side.
 

@@ -18,6 +18,7 @@ them, so every parser lowercases what it returns unless it says otherwise.
 This module has no `main`; it is imported, not run directly.
 """
 
+import http.client
 import json
 import os
 import sys
@@ -63,13 +64,28 @@ def gh_api(
     A transient failure (see `is_transient_error`) is retried up to
     *max_attempts* times in all. Once they are spent, or on any other error,
     raises ``urllib.error.HTTPError`` or ``urllib.error.URLError``.
+
+    urllib wraps only a failure to send the request in URLError. A failure
+    while reading the answer (a read timeout, a dropped connection) comes out
+    as a bare OSError or http.client.HTTPException, so it is wrapped in a
+    URLError here, for the callers' handlers. The request may have been
+    applied by then, so it is retried only for a method a repeat cannot
+    duplicate: not a POST, which could post a comment twice.
     """
     backoff = INITIAL_BACKOFF_SECONDS
     for attempt in range(1, max_attempts + 1):
+        read_failed = False
         try:
-            return _gh_api_once(path, token, method=method, body=body)
+            try:
+                return _gh_api_once(path, token, method=method, body=body)
+            except urllib.error.URLError:
+                raise
+            except (OSError, http.client.HTTPException) as exc:
+                read_failed = True
+                raise urllib.error.URLError(exc) from exc
         except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-            if attempt >= max_attempts or not is_transient_error(exc):
+            last = attempt >= max_attempts
+            if last or not is_transient_error(exc) or (read_failed and method == "POST"):
                 raise
             print(
                 f"Transient error on {method} {path} "
@@ -218,8 +234,21 @@ def load_json(name: str, text: str, default: object = None) -> object:
         if default is None:
             raise InputError(f"{name} is required and was not given")
         return default
+
+    def no_repeats(pairs: list[tuple[str, object]]) -> dict:
+        # json.loads keeps only the last of a repeated key, which would hide a
+        # table entry the caller wrote.
+        result: dict = {}
+        for key, value in pairs:
+            if key in result:
+                raise InputError(f"{name}: {key!r} is listed twice")
+            result[key] = value
+        return result
+
     try:
-        return json.loads(text)
+        return json.loads(text, object_pairs_hook=no_repeats)
+    except InputError:
+        raise
     except ValueError as exc:
         raise InputError(f"{name} is not valid JSON ({exc}): {text!r}") from exc
 

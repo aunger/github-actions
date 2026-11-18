@@ -103,6 +103,17 @@ class TestParseRules(unittest.TestCase):
             lbf.parse_rules("{}", name="rules")
         self.assertIn("rules", str(caught.exception))
 
+    def test_a_glob_that_cannot_compile_is_an_input_error(self):
+        # A reversed range is a valid-looking class that no regex accepts.
+        text = json.dumps({"x": {"mode": "any-file", "paths": ["docs/[z-a].md"]}})
+        with self.assertRaisesRegex(lbf.lc.InputError, "'x' has an invalid glob"):
+            lbf.parse_rules(text)
+
+    def test_an_exactly_repeated_label_is_refused(self):
+        rule = '{"mode": "any-file", "paths": ["a/**"]}'
+        with self.assertRaisesRegex(lbf.lc.InputError, "listed twice"):
+            lbf.parse_rules(f'{{"x": {rule}, "x": {rule}}}')
+
 
 # ---------------------------------------------------------------------------
 # Glob semantics the docstring promises
