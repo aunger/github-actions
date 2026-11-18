@@ -70,6 +70,19 @@ def main() -> int:
     issue_number_str = os.environ.get("ISSUE_NUMBER", "")
     added_label = os.environ.get("ADDED_LABEL", "")
 
+    # The tables are read first, so a malformed one fails the step on every
+    # event, not only on the next one that has work to do.
+    try:
+        rules = lc.ExclusiveRules.parse(
+            "EXCLUSIVE_SETS",
+            os.environ.get("EXCLUSIVE_SETS", ""),
+            "EXCLUSIVE_PREFIXES",
+            os.environ.get("EXCLUSIVE_PREFIXES", ""),
+        )
+    except lc.InputError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
     event_action = os.environ.get("EVENT_ACTION", "")
     if event_action and event_action != "labeled":
         print(f"Event action '{event_action}' is not 'labeled'--skipping enforcement.")
@@ -89,17 +102,6 @@ def main() -> int:
         issue_number = int(issue_number_str)
     except ValueError:
         print(f"Error: ISSUE_NUMBER is not a valid integer: {issue_number_str!r}", file=sys.stderr)
-        return 1
-
-    try:
-        rules = lc.ExclusiveRules.parse(
-            "EXCLUSIVE_SETS",
-            os.environ.get("EXCLUSIVE_SETS", ""),
-            "EXCLUSIVE_PREFIXES",
-            os.environ.get("EXCLUSIVE_PREFIXES", ""),
-        )
-    except lc.InputError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     if not rules.governs(added_label):

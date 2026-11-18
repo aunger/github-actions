@@ -78,6 +78,14 @@ def main() -> int:
     issue_number_str = os.environ.get("ISSUE_NUMBER", "")
     added_label = os.environ.get("ADDED_LABEL", "")
 
+    # The table is read first, so a malformed one fails the step on every
+    # event, not only on the next one that has work to do.
+    try:
+        snooze_labels = lc.parse_snooze_labels("SNOOZE_LABELS", os.environ.get("SNOOZE_LABELS", ""))
+    except lc.InputError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
     event_action = os.environ.get("EVENT_ACTION", "")
     if event_action and event_action != "labeled":
         print(f"Event action '{event_action}' is not 'labeled'--skipping snooze.")
@@ -92,12 +100,6 @@ def main() -> int:
         if not value:
             print(f"Warning: {name} not set--skipping snooze.", file=sys.stderr)
             return 0
-
-    try:
-        snooze_labels = lc.parse_snooze_labels("SNOOZE_LABELS", os.environ.get("SNOOZE_LABELS", ""))
-    except lc.InputError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
 
     if added_label.lower() not in {label.lower() for label in snooze_labels}:
         print(f"Label '{added_label}' is not a snooze label--nothing to do.")

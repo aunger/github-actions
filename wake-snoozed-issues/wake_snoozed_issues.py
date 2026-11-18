@@ -258,19 +258,21 @@ def main() -> int:
     token = os.environ.get("GITHUB_TOKEN", "")
     repo = os.environ.get("GITHUB_REPOSITORY", "")
 
-    if not token:
-        print("Warning: GITHUB_TOKEN not set; skipping wake check.", file=sys.stderr)
-        return 0
-    if not repo:
-        print("Warning: GITHUB_REPOSITORY not set; skipping wake check.", file=sys.stderr)
-        return 0
-
+    # The tables are read first, so a malformed one fails the step even when
+    # the run would otherwise skip.
     try:
         snooze_labels = lc.parse_snooze_labels("SNOOZE_LABELS", os.environ.get("SNOOZE_LABELS", ""))
         remove_on_wake = lc.parse_label_list("REMOVE_ON_WAKE", os.environ.get("REMOVE_ON_WAKE", ""))
     except lc.InputError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+    if not token:
+        print("Warning: GITHUB_TOKEN not set; skipping wake check.", file=sys.stderr)
+        return 0
+    if not repo:
+        print("Warning: GITHUB_REPOSITORY not set; skipping wake check.", file=sys.stderr)
+        return 0
 
     now = datetime.datetime.now(datetime.UTC)
     woken = 0

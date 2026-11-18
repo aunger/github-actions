@@ -122,6 +122,15 @@ class TestMain(unittest.TestCase):
                     self.assertEqual(0, si.main())
         mock_api.assert_not_called()
 
+    def test_a_malformed_table_fails_even_on_an_event_it_would_skip(self):
+        for env in ({"EVENT_ACTION": "unlabeled"}, {"ADDED_LABEL": ""}):
+            with self.subTest(env=env):
+                with patch.dict(os.environ, {**env, "SNOOZE_LABELS": "{"}):
+                    with patch.object(lc, "gh_api") as mock_api:
+                        with patch("sys.stderr"):
+                            self.assertEqual(1, si.main())
+                mock_api.assert_not_called()
+
     def test_exit_0_when_added_label_missing(self):
         with patch.dict(os.environ, {"ADDED_LABEL": ""}):
             result = si.main()

@@ -112,6 +112,15 @@ class TestMain(unittest.TestCase):
         self.assertEqual([], calls)
         self.assertIn("not 'labeled'", out)
 
+    def test_a_malformed_table_fails_even_on_an_event_it_would_skip(self):
+        for env in ({"EVENT_ACTION": "unlabeled"}, {"ADDED_LABEL": ""}):
+            with self.subTest(env=env):
+                with patch.dict(os.environ, {**env, "EXCLUSIVE_SETS": "[p1"}):
+                    with patch.object(lc, "gh_api") as mock_api:
+                        with redirect_stderr(io.StringIO()):
+                            self.assertEqual(1, emxl.main())
+                mock_api.assert_not_called()
+
     def test_a_labeled_event_is_enforced(self):
         with patch.dict(os.environ, {"EVENT_ACTION": "labeled"}):
             code, calls, _ = self._run("p1", ["p1", "p2"], None)

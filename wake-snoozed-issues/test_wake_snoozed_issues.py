@@ -405,6 +405,13 @@ class TestMain(unittest.TestCase):
             result = wsi.main()
         self.assertEqual(result, 0)
 
+    def test_a_malformed_table_fails_even_without_a_token(self):
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "", "REMOVE_ON_WAKE": "[x"}):
+            with patch.object(wsi, "fetch_issues_with_label") as mock_fetch:
+                with patch("sys.stderr"):
+                    self.assertEqual(1, wsi.main())
+        mock_fetch.assert_not_called()
+
     def test_exit_0_when_repository_missing(self):
         with patch.dict(os.environ, {"GITHUB_REPOSITORY": ""}):
             result = wsi.main()
