@@ -363,6 +363,17 @@ class TestWakeIssue(unittest.TestCase):
         comment_body = mock_api.call_args_list[2][1]["body"]["body"]
         self.assertIn("orchestrating", comment_body)
 
+    def test_comment_does_not_claim_labels_it_failed_to_remove(self):
+        issue = _make_issue(7, ["snooze 30 days", "orchestrating"])
+        with patch.object(lc, "gh_api", side_effect=[issue, None, None]) as mock_api:
+            with patch.object(lc, "remove_labels", side_effect=[True, False]):
+                with patch("builtins.print"):
+                    self.wake(7, "snooze 30 days")
+
+        comment_body = mock_api.call_args_list[2][1]["body"]["body"]
+        self.assertIn("Tried to remove label(s): orchestrating.", comment_body)
+        self.assertNotIn("Also removed", comment_body)
+
     def test_case_insensitive_snooze_label_still_matches(self):
         issue = _make_issue(7, ["Snooze 30 Days"])
         with patch.object(lc, "gh_api", side_effect=[issue, None, None]):

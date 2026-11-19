@@ -215,13 +215,19 @@ def wake_issue(
     if not lc.remove_labels(issue_number, [snooze_name], repo, token, reason="expired-snooze"):
         done = "reopened" if reopen else "woke"
         raise RuntimeError(f"{done} #{issue_number} but could not remove '{snooze_name}'")
-    if others and not lc.remove_labels(issue_number, others, repo, token, reason="expired-snooze"):
+    others_removed = not others or lc.remove_labels(
+        issue_number, others, repo, token, reason="expired-snooze"
+    )
+    if not others_removed:
         print(f"#{issue_number}: some of {others} could not be removed.", file=sys.stderr)
 
     other_stripped = sorted(others)
     stripped_note = ""
     if other_stripped:
-        stripped_note = f" Also removed label(s): {', '.join(other_stripped)}."
+        # remove_labels says only whether every removal succeeded, so after a
+        # failure the comment does not claim which of them did.
+        verb = "Also removed" if others_removed else "Tried to remove"
+        stripped_note = f" {verb} label(s): {', '.join(other_stripped)}."
 
     try:
         lc.gh_api(
