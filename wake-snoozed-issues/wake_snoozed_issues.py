@@ -10,6 +10,12 @@ lists there the process-state labels a woken issue should not keep, so that it
 lands back in plain triage rather than resuming mid-cycle in whatever state it
 was closed in.
 
+The snooze label is what decides, not how the issue was closed: an issue
+closed as completed, or with no reason, while it carried the label is reopened
+the same way, and one reopened by hand is stripped and commented on the same
+way, without the reopen. A person who expects a snooze label to bring an
+issue back gets that whatever else happened to it in the meantime.
+
 The time is measured from the most recent "labeled" event naming the issue's
 snooze label (the issue events API; see find_label_applied_at), not from the
 issue's `updated_at`, which any comment or other label change would also bump
@@ -145,7 +151,7 @@ def wake_issue(
     token: str,
     remove_on_wake: frozenset[str] = frozenset(),
 ) -> bool:
-    """Reopen *issue_number* if it is still snoozed under *snooze_label*.
+    """Wake *issue_number* if it still carries *snooze_label*.
 
     Re-fetches the issue's current labels immediately before acting, rather
     than reusing the list-call snapshot main() saw when it decided this
@@ -162,11 +168,11 @@ def wake_issue(
     narrower window between this fetch and the DELETE calls survives, since
     remove_labels() only ever removes the labels it is explicitly told to.
 
-    An issue that is no longer closed as not planned (reopened by hand, or
-    closed as completed) is not woken: only its spent snooze label is removed.
+    A closed issue is reopened whatever its close reason; an open one, such as
+    one reopened by hand, is stripped and commented on without a reopen.
 
-    Returns True if the issue was woken (reopened and stripped), False if it
-    turned out to no longer be snoozed under *snooze_label*. Raises
+    Returns True if the issue was woken (reopened if closed, and stripped),
+    False if it turned out to no longer carry *snooze_label*. Raises
     RuntimeError if the snooze label could not be removed, so the caller logs
     a failure, and no comment is posted.
     """
@@ -185,34 +191,27 @@ def wake_issue(
 
     snooze_name = next(lbl for lbl in current_labels if lbl.lower() == snooze_lower)
 
-    # Someone reopened the issue by hand, or closed it another way, with the
-    # label still on: it is no longer waiting out the snooze, so only the
-    # spent label comes off, and its live state and labels are left alone.
-    if issue.get("state") != "closed" or issue.get("state_reason") != "not_planned":
-        print(
-            f"#{issue_number} is {issue.get('state')} "
-            f"({issue.get('state_reason') or 'no reason'}), not snoozed--removing only "
-            f"its spent '{snooze_label}' label."
-        )
-        if not lc.remove_labels(issue_number, [snooze_name], repo, token, reason="expired-snooze"):
-            raise RuntimeError(f"could not remove '{snooze_name}' from #{issue_number}")
-        return False
-
     others = [lbl for lbl in current_labels if lbl.lower() in remove_on_wake]
 
-    # Reopening the issue's state never touches its labels at all--no PATCH
-    # body key for labels is sent here, so there is nothing for this call to
-    # clobber even if the label list changes again immediately afterward.
-    lc.gh_api(
-        f"repos/{repo}/issues/{issue_number}",
-        token=token,
-        method="PATCH",
-        body={"state": "open"},
-        read_response=False,
-    )
-    # The snooze label goes first and alone: while it stays, every run would
-    # wake the issue again and post another comment. Left on an open issue,
-    # the next run removes it by the branch above, with no comment.
+    # An issue closed in any way while it carried the label is reopened, not
+    # only one closed as not planned; one already open needs no PATCH.
+    reopen = issue.get("state") == "closed"
+    if reopen:
+        # Reopening the issue's state never touches its labels at all--no
+        # PATCH body key for labels is sent here, so there is nothing for this
+        # call to clobber even if the label list changes again immediately
+        # afterward.
+        lc.gh_api(
+            f"repos/{repo}/issues/{issue_number}",
+            token=token,
+            method="PATCH",
+            body={"state": "open"},
+            read_response=False,
+        )
+    # The snooze label goes first and alone, and the comment only once it is
+    # gone: while it stays, every run would wake the issue again. A run after a
+    # failure here finds the issue open with the label still on, wakes it
+    # without a second reopen, and posts the one comment.
     if not lc.remove_labels(issue_number, [snooze_name], repo, token, reason="expired-snooze"):
         raise RuntimeError(f"reopened #{issue_number} but could not remove '{snooze_name}'")
     if others and not lc.remove_labels(issue_number, others, repo, token, reason="expired-snooze"):
@@ -230,7 +229,8 @@ def wake_issue(
             method="POST",
             body={
                 "body": (
-                    f"The `{snooze_label}` snooze has elapsed. Reopening and returning this "
+                    f"The `{snooze_label}` snooze has elapsed. "
+                    f"{'Reopening and returning' if reopen else 'Returning'} this "
                     f"issue to triage.{stripped_note}"
                 )
             },
@@ -240,7 +240,7 @@ def wake_issue(
         # undone by a failed notification comment; report this narrowly so
         # the Actions log does not read this issue as untouched.
         print(
-            f"#{issue_number} was reopened and stripped of its snooze, but posting the "
+            f"#{issue_number} was woken and stripped of its snooze, but posting the "
             f"wake comment failed: {exc}",
             file=sys.stderr,
         )

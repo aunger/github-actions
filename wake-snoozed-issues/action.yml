@@ -2,8 +2,9 @@ name: Wake snoozed issues
 description: >-
   Reopen each issue whose snooze label's days have passed since it was applied,
   remove that label and any others the caller lists, and comment that the
-  snooze has run out. An issue no longer closed as not planned, such as one
-  reopened by hand, only loses the spent snooze label.
+  snooze has run out. The label decides, not the close reason: an issue closed
+  as completed is reopened too, and one already reopened by hand is stripped
+  and commented on all the same.
 
 # Caller: a `schedule` workflow (daily suits day-long snoozes) with
 # `issues: write`, passing the same snooze-labels table as snooze-issues. The
