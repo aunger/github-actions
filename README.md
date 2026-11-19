@@ -27,7 +27,7 @@ uses: aunger/vcs-automation/<action>@<40-character-sha>
 | `propagate-issue-labels` | Copies the labels of the issues a pull request closes onto it. |
 | `reconcile-issue-labels` | Applies `propagate-issue-labels` to every open pull request, on demand. |
 | `snooze-issues` | Closes an issue as not planned when a snooze label is added. |
-| `wake-snoozed-issues` | Reopens each snoozed issue once its snooze label's days have passed. |
+| `wake-snoozed-issues` | Returns each issue carrying a snooze label to triage once the label's days have passed, reopening it whatever its close reason. |
 
 Each action's `action.yml` documents its inputs, and the permissions and triggers its caller needs.
 `install-pinned-requirements` and `dependency-audit` also have a `README.md`: the first says how to write an idempotent installer for places other than CI, and the second documents the ignore file.
@@ -78,6 +78,8 @@ A project using both pairs them like this:
 - Enforcement runs first because it can remove a blocking label (adding `orchestrate` removes `orchestrating`), and a removal made with `GITHUB_TOKEN` starts no new run, so the gate must hear about it in the same job.
 - The project's `.claude/orchestrate.json` leaves the gate's check off `named_checks` and matches it with `ignored_check_regex`: it is red by design for the whole cycle, so the cycle neither waits for it to pass nor treats it as a failure.
 - `propagate-issue-labels` lists the protocol's six labels (`orchestrate`, `orchestrating`, `verification needed`, `verified`, `changes requested` and `changes done`) in `excluded-labels`, since an issue and its pull request carry them separately, and `wake-snoozed-issues` lists them in `remove-on-wake`, so a woken issue does not resume mid-cycle.
+  The snooze label decides when an issue wakes, not its state: a closed issue is reopened even if it was closed as completed or as a duplicate after a reopen by hand, and an issue reopened by hand is stripped of these labels even mid-cycle.
+  Remove the snooze label from an issue that should not wake.
 
 The orchestrate plugin's README lists the protocol's labels from its side.
 

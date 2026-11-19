@@ -273,29 +273,63 @@ class TestWakeIssue(unittest.TestCase):
         )
         self.assertEqual(2, mock_remove.call_count)
 
-    def test_an_issue_reopened_by_hand_keeps_its_state_and_labels(self):
-        # Someone reopened it and started work; only the spent label comes off.
-        issue = _make_issue(7, ["snooze 7 days", "orchestrating"], state="open")
-        with patch.object(lc, "gh_api", side_effect=[issue]) as mock_api:
+    def test_an_issue_reopened_by_hand_is_stripped_without_a_reopen(self):
+        # The snooze label still decides: the issue returns to triage, and as
+        # it is already open, no PATCH is sent.
+        issue = _make_issue(7, ["snooze 7 days", "orchestrating", "ci"], state="open")
+        with patch.object(lc, "gh_api", side_effect=[issue, None]) as mock_api:
             with patch.object(lc, "remove_labels", return_value=True) as mock_remove:
-                with patch("builtins.print"):
-                    result = self.wake(7, "snooze 7 days")
+                result = self.wake(7, "snooze 7 days")
 
-        self.assertFalse(result)
-        mock_remove.assert_called_once_with(
-            7, ["snooze 7 days"], "owner/repo", "tok", reason="expired-snooze"
-        )
-        self.assertEqual(1, mock_api.call_count)  # the read: no reopen, no comment
+        self.assertTrue(result)
+        self.assertEqual(["snooze 7 days"], mock_remove.call_args_list[0][0][1])
+        self.assertEqual(["orchestrating"], mock_remove.call_args_list[1][0][1])
+        methods = [c.kwargs.get("method", "GET") for c in mock_api.call_args_list]
+        self.assertEqual(["GET", "POST"], methods)
+        comment = mock_api.call_args_list[1][1]["body"]["body"]
+        self.assertIn("Returning this issue to triage", comment)
+        self.assertNotIn("Reopening", comment)
 
-    def test_an_issue_closed_as_completed_is_not_reopened(self):
-        issue = _make_issue(7, ["snooze 7 days"], state_reason="completed")
-        with patch.object(lc, "gh_api", side_effect=[issue]) as mock_api:
+    def test_an_issue_closed_as_completed_is_reopened(self):
+        issue = _make_issue(7, ["snooze 7 days", "orchestrate"], state_reason="completed")
+        with patch.object(lc, "gh_api", side_effect=[issue, None, None]) as mock_api:
             with patch.object(lc, "remove_labels", return_value=True) as mock_remove:
-                with patch("builtins.print"):
-                    self.assertFalse(self.wake(7, "snooze 7 days"))
+                self.assertTrue(self.wake(7, "snooze 7 days"))
 
-        mock_remove.assert_called_once()
-        self.assertEqual(1, mock_api.call_count)
+        self.assertEqual(2, mock_remove.call_count)
+        methods = [c.kwargs.get("method", "GET") for c in mock_api.call_args_list]
+        self.assertEqual(["GET", "PATCH", "POST"], methods)
+        self.assertEqual({"state": "open"}, mock_api.call_args_list[1][1]["body"])
+        self.assertIn("Reopening and returning", mock_api.call_args_list[2][1]["body"]["body"])
+
+    def test_an_issue_closed_with_no_reason_is_reopened(self):
+        issue = _make_issue(7, ["snooze 7 days"], state_reason=None)
+        with patch.object(lc, "gh_api", side_effect=[issue, None, None]) as mock_api:
+            with patch.object(lc, "remove_labels", return_value=True):
+                self.assertTrue(self.wake(7, "snooze 7 days"))
+
+        self.assertEqual("PATCH", mock_api.call_args_list[1][1]["method"])
+
+    def test_a_run_after_a_failed_label_removal_comments_once_without_a_second_reopen(self):
+        # The first run reopened the issue but could not remove the label, so it
+        # posted no comment; the next finds the issue open with the label on.
+        closed = _make_issue(7, ["snooze 7 days"])
+        reopened = _make_issue(7, ["snooze 7 days"], state="open")
+        with patch.object(lc, "gh_api", side_effect=[closed, None, reopened, None]) as mock_api:
+            with patch.object(lc, "remove_labels", side_effect=[False, True]):
+                with self.assertRaisesRegex(RuntimeError, "^reopened #7 "):
+                    self.wake(7, "snooze 7 days")
+                self.assertTrue(self.wake(7, "snooze 7 days"))
+
+        methods = [c.kwargs.get("method", "GET") for c in mock_api.call_args_list]
+        self.assertEqual(["GET", "PATCH", "GET", "POST"], methods)
+
+    def test_a_failed_removal_on_an_open_issue_does_not_claim_a_reopen(self):
+        issue = _make_issue(7, ["snooze 7 days"], state="open")
+        with patch.object(lc, "gh_api", side_effect=[issue]):
+            with patch.object(lc, "remove_labels", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "^woke #7 but could not remove"):
+                    self.wake(7, "snooze 7 days")
 
     def test_a_snooze_label_that_cannot_be_removed_posts_no_comment(self):
         # While it stays, every run would wake the issue and comment again.
@@ -328,6 +362,17 @@ class TestWakeIssue(unittest.TestCase):
 
         comment_body = mock_api.call_args_list[2][1]["body"]["body"]
         self.assertIn("orchestrating", comment_body)
+
+    def test_comment_does_not_claim_labels_it_failed_to_remove(self):
+        issue = _make_issue(7, ["snooze 30 days", "orchestrating"])
+        with patch.object(lc, "gh_api", side_effect=[issue, None, None]) as mock_api:
+            with patch.object(lc, "remove_labels", side_effect=[True, False]):
+                with patch("builtins.print"):
+                    self.wake(7, "snooze 30 days")
+
+        comment_body = mock_api.call_args_list[2][1]["body"]["body"]
+        self.assertIn("Tried to remove label(s): orchestrating.", comment_body)
+        self.assertNotIn("Also removed", comment_body)
 
     def test_case_insensitive_snooze_label_still_matches(self):
         issue = _make_issue(7, ["Snooze 30 Days"])
