@@ -213,7 +213,8 @@ def wake_issue(
     # failure here finds the issue open with the label still on, wakes it
     # without a second reopen, and posts the one comment.
     if not lc.remove_labels(issue_number, [snooze_name], repo, token, reason="expired-snooze"):
-        raise RuntimeError(f"reopened #{issue_number} but could not remove '{snooze_name}'")
+        done = "reopened" if reopen else "woke"
+        raise RuntimeError(f"{done} #{issue_number} but could not remove '{snooze_name}'")
     if others and not lc.remove_labels(issue_number, others, repo, token, reason="expired-snooze"):
         print(f"#{issue_number}: some of {others} could not be removed.", file=sys.stderr)
 

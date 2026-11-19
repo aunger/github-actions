@@ -317,12 +317,19 @@ class TestWakeIssue(unittest.TestCase):
         reopened = _make_issue(7, ["snooze 7 days"], state="open")
         with patch.object(lc, "gh_api", side_effect=[closed, None, reopened, None]) as mock_api:
             with patch.object(lc, "remove_labels", side_effect=[False, True]):
-                with self.assertRaises(RuntimeError):
+                with self.assertRaisesRegex(RuntimeError, "^reopened #7 "):
                     self.wake(7, "snooze 7 days")
                 self.assertTrue(self.wake(7, "snooze 7 days"))
 
         methods = [c.kwargs.get("method", "GET") for c in mock_api.call_args_list]
         self.assertEqual(["GET", "PATCH", "GET", "POST"], methods)
+
+    def test_a_failed_removal_on_an_open_issue_does_not_claim_a_reopen(self):
+        issue = _make_issue(7, ["snooze 7 days"], state="open")
+        with patch.object(lc, "gh_api", side_effect=[issue]):
+            with patch.object(lc, "remove_labels", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "^woke #7 but could not remove"):
+                    self.wake(7, "snooze 7 days")
 
     def test_a_snooze_label_that_cannot_be_removed_posts_no_comment(self):
         # While it stays, every run would wake the issue and comment again.
