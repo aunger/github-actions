@@ -20,6 +20,12 @@ name: Strip session bylines
 # A workflow_dispatch run cleans one whole issue or pull request, named by
 # number: its description and every comment and review on it. That catches
 # bylines written before this workflow existed, or ones it missed.
+#
+# The other half of the same policy is the `attribution` block of
+# .claude/settings.json, which tells Claude Code to add no attribution, trailer
+# or session link to the commits and pull requests it writes here. That block
+# reaches only contributors who use Claude Code in this checkout; this workflow
+# catches whatever still gets through.
 
 on:
   issues:
